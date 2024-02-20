@@ -10,10 +10,12 @@ spec:
       template:
         spec:
           restartPolicy: Never
+          imagePullSecrets:
+            - name: tmhhn
           containers:
             - name: task
-              image: registry.digitalocean.com/tmhhn/iamdreamingof-generator:latest
-              imagePullPolicy: Always
+              image: registry.digitalocean.com/tmhhn/iamdreamingof-generator
+              imagePullPolicy: Always 
               env:
                 - name: CDN_ACCESS_KEY_ID
                   valueFrom:

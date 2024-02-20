@@ -128,3 +128,7 @@ def main(args: typing.Dict[str, str]):
     # TODO: Validate date_to_generate_for is a date
     logging.info("Generating images for date: %s", date_to_generate_for)
     generate_for_date(date_to_generate_for)
+
+
+if __name__ == "__main__":
+    main({})
