@@ -12,6 +12,8 @@ requests = "^2.31.0"
 boto3 = "^1.34.44"
 wand = "^0.6.13"
 tenacity = "^8.2.3"
+rollbar = "^1.0.0"
+logtail-python = "^0.2.10"
 
 
 [build-system]

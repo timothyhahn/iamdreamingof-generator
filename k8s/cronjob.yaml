@@ -14,7 +14,7 @@ spec:
             - name: tmhhn
           containers:
             - name: task
-              image: registry.digitalocean.com/tmhhn/iamdreamingof-generator
+              image: registry.digitalocean.com/tmhhn/iamdreamingof-generator@sha256:35930e35103af11f873527e97e23d15128d16b271e7435328df3c6da6b07f71a
               imagePullPolicy: Always 
               env:
                 - name: CDN_ACCESS_KEY_ID
