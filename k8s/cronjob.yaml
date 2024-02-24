@@ -14,7 +14,7 @@ spec:
             - name: tmhhn
           containers:
             - name: task
-              image: registry.digitalocean.com/tmhhn/iamdreamingof-generator@sha256:35930e35103af11f873527e97e23d15128d16b271e7435328df3c6da6b07f71a
+              image: registry.digitalocean.com/tmhhn/iamdreamingof-generator@sha256:9c97e15fce0dda0b2c980aaf4946484de37443e53f2bcc341ea1a50a78d11bb8
               imagePullPolicy: Always 
               env:
                 - name: CDN_ACCESS_KEY_ID
@@ -32,3 +32,15 @@ spec:
                     secretKeyRef:
                       name: iamdreamingof-secrets
                       key: AI_API_KEY
+                - name: LOGTAIL_SOURCE_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: iamdreamingof-secrets
+                      key: LOGTAIL_SOURCE_TOKEN
+                - name: ROLLBAR_ACCESS_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: iamdreamingof-secrets
+                      key: ROLLBAR_ACCESS_TOKEN
+                - name: ROLLBAR_ENVIRONMENT
+                  value: production
