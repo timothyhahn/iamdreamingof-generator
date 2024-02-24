@@ -44,3 +44,13 @@ spec:
                       key: ROLLBAR_ACCESS_TOKEN
                 - name: ROLLBAR_ENVIRONMENT
                   value: production
+                - name: HONEYBADGER_CHECKIN_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: iamdreamingof-secrets
+                      key: HONEYBADGER_CHECKIN_ID
+                - name: HONEYBADGER_API_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: iamdreamingof-secrets
+                      key: HONEYBADGER_API_KEY
