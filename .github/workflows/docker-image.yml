@@ -30,3 +30,7 @@ jobs:
       run: docker tag iamdreamingof-generator:"$GITHUB_SHA" registry.digitalocean.com/tmhhn/iamdreamingof-generator:latest
     - name: Push image to DO Container Registry
       run: docker push registry.digitalocean.com/tmhhn/iamdreamingof-generator:latest
+    - name: Report to Honeybadger a new image has been shipped, should be picked up with next cronjob
+      uses: honeybadger-io/github-notify-deploy-action@v1
+      with:
+        api_key: ${{ secrets.HONEYBADGER_API_KEY }}
