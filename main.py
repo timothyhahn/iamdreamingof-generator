@@ -7,8 +7,11 @@ from tempfile import NamedTemporaryFile
 from urllib.request import urlretrieve
 from uuid import uuid4
 
+import requests
 import rollbar
+from honeybadger.contrib import HoneybadgerHandler
 from logtail import LogtailHandler
+from honeybadger import honeybadger
 from tenacity import retry, wait_fixed, stop_after_attempt
 
 import cdn
@@ -20,18 +23,27 @@ from words import generate_words_for_day
 
 DATE_FORMAT = "%Y-%m-%d"
 
-handler = LogtailHandler(source_token=os.environ["LOGTAIL_SOURCE_TOKEN"])
+logtail_handler = LogtailHandler(source_token=os.environ["LOGTAIL_SOURCE_TOKEN"])
+honeybadger_handler = HoneybadgerHandler(api_key=os.environ["HONEYBADGER_API_KEY"])
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 logger.handlers = []
-logger.addHandler(handler)
+logger.addHandler(logtail_handler)
+
 
 rollbar.init(
     access_token=os.environ["ROLLBAR_ACCESS_TOKEN"],
     environment=os.environ["ROLLBAR_ENVIRONMENT"],
     code_version="1.0",
 )
+
+honeybadger.configure(api_key=os.environ["HONEYBADGER_API_KEY"])
+
+def check_in():
+    logger.info("Checking in")
+    requests.get(f'https://api.honeybadger.io/v1/check_in/{os.environ["HONEYBADGER_CHECKIN_ID"]}')
+    logger.info("Checked in")
 
 
 def get_today_str() -> str:
@@ -147,6 +159,7 @@ def main(args: typing.Dict[str, str]):
     # TODO: Validate date_to_generate_for is a date
     logger.info("Generating images for date: %s", date_to_generate_for)
     generate_for_date(date_to_generate_for)
+    check_in()
 
 
 if __name__ == "__main__":
