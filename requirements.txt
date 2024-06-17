@@ -10,11 +10,11 @@ msgpack==1.0.7
 pydantic==2.6.1
 pydantic_core==2.16.2
 python-dateutil==2.8.2
-requests==2.31.0
+requests==2.32.2
 rollbar==1.0.0
 s3transfer==0.10.0
 six==1.16.0
 tenacity==8.2.3
 typing_extensions==4.9.0
-urllib3==2.0.7
+urllib3==2.2.2
 Wand==0.6.13
