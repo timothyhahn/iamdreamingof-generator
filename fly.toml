@@ -1,0 +1,15 @@
+# fly.toml app configuration file generated for iamdreamingof-generator on 2025-10-05T17:29:41-06:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'iamdreamingof-generator'
+primary_region = 'ewr'
+kill_timeout = 300
+
+[build]
+
+[[vm]]
+  memory = '512mb'
+  cpu_kind = 'shared'
+  cpus = 1

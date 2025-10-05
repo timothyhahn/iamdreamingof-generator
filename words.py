@@ -6,7 +6,7 @@ from models import Difficulty, Word, WordsForDay
 
 
 def import_json_wordlist(filename: str) -> list[str]:
-    with open(filename, "r") as file:
+    with open(filename) as file:
         return json.loads(file.read())
 
 
@@ -44,7 +44,7 @@ def generate_word_list(difficulty: Difficulty) -> list[Word]:
 
 
 def get_total_word_count(words: list[Word]) -> int:
-    return len(set([word.word for word in words]))
+    return len({word.word for word in words})
 
 
 def generate_words_for_day(day: str) -> WordsForDay:

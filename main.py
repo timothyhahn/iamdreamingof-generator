@@ -1,49 +1,24 @@
 import logging
-import os
 import sys
-import typing
 from datetime import date
 from tempfile import NamedTemporaryFile
 from urllib.request import urlretrieve
 from uuid import uuid4
 
-import requests
-import rollbar
-from honeybadger.contrib import HoneybadgerHandler
-from logtail import LogtailHandler
-from honeybadger import honeybadger
-from tenacity import retry, wait_fixed, stop_after_attempt
+from tenacity import retry, stop_after_attempt, wait_fixed
 
 import cdn
-from ai import generate_prompt, generate_image
+from ai import generate_image, generate_prompt
 from cdn import read_public_json
 from image import generate_images_for_web
-from models import Days, Challenge, Word, Challenges, Day, DateEntry
+from models import Challenge, Challenges, DateEntry, Day, Days, Word
 from words import generate_words_for_day
 
 DATE_FORMAT = "%Y-%m-%d"
 
-logtail_handler = LogtailHandler(source_token=os.environ["LOGTAIL_SOURCE_TOKEN"])
-honeybadger_handler = HoneybadgerHandler(api_key=os.environ["HONEYBADGER_API_KEY"])
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
-logger.handlers = []
-logger.addHandler(logtail_handler)
-
-
-rollbar.init(
-    access_token=os.environ["ROLLBAR_ACCESS_TOKEN"],
-    environment=os.environ["ROLLBAR_ENVIRONMENT"],
-    code_version="1.0",
-)
-
-honeybadger.configure(api_key=os.environ["HONEYBADGER_API_KEY"])
-
-def check_in():
-    logger.info("Checking in")
-    requests.get(f'https://api.honeybadger.io/v1/check_in/{os.environ["HONEYBADGER_CHECKIN_ID"]}')
-    logger.info("Checked in")
 
 
 def get_today_str() -> str:
@@ -89,19 +64,33 @@ def generate_for_date(date_to_generate_for: str):
     # Get days.json
     try:
         days_json = read_public_json(f"days.json?id={str(uuid4())}")
-        days = Days.parse_obj(days_json)
-    except:
-        rollbar.report_exc_info()
-        logger.error("Failed to fetch days.json, starting over with a new one")
+        days = Days.model_validate(days_json)
+    except Exception:
+        logger.exception("Failed to fetch days.json, starting over with a new one")
         days = Days(days=[])
 
-    # Get ID for today
-    # TODO: Need to make it "overwrite" it if the date already exists and it was added to days.json
+    # Get ID for today - reuse existing ID if date already exists, otherwise create new one
     challenge_id = -1
-    for day in days.days:
+    existing_day_index = -1
+
+    for i, day in enumerate(days.days):
+        if day.date == date_to_generate_for:
+            challenge_id = day.id
+            existing_day_index = i
+            logger.info(
+                "Found existing entry for date %s with ID %s, will overwrite",
+                date_to_generate_for,
+                challenge_id,
+            )
+            break
         if day.id > challenge_id:
             challenge_id = day.id
-    challenge_id += 1
+
+    if existing_day_index == -1:
+        challenge_id += 1
+        logger.info(
+            "No existing entry found, creating new entry with ID %s", challenge_id
+        )
 
     logger.info("ID assigned to date is %s", challenge_id)
 
@@ -137,11 +126,22 @@ def generate_for_date(date_to_generate_for: str):
 
             # Update days.json with today's data
             logger.info("Updating days file")
-            days.days.append(DateEntry(id=for_day.id, date=for_day.date))
+            if existing_day_index >= 0:
+                # Overwrite existing entry
+                days.days[existing_day_index] = DateEntry(
+                    id=for_day.id, date=for_day.date
+                )
+                logger.info(
+                    "Overwriting existing entry at index %s", existing_day_index
+                )
+            else:
+                # Add new entry
+                days.days.append(DateEntry(id=for_day.id, date=for_day.date))
+                logger.info("Adding new entry to days.json")
             with NamedTemporaryFile(delete=False) as new_days_file:
                 new_days_file.write(days.model_dump_json().encode("utf-8"))
                 new_days_file.close()
-                cdn.upload_file(new_days_file.name, f"days.json")
+                cdn.upload_file(new_days_file.name, "days.json")
 
             # If date to generate for is today, replace today.json with today's data.
             if date_to_generate_for == get_today_str():
@@ -149,17 +149,15 @@ def generate_for_date(date_to_generate_for: str):
                 cdn.upload_file(today_file.name, "today.json")
             else:
                 logger.info("Not today, not updating today.json")
-    except:
-        rollbar.report_exc_info()
-        logger.error("Failed to generate challenges, starting over")
+    except Exception:
+        logger.exception("Failed to generate challenges, starting over")
 
 
-def main(args: typing.Dict[str, str]):
+def main(args: dict[str, str]):
     date_to_generate_for = args.get("date", get_today_str())
     # TODO: Validate date_to_generate_for is a date
     logger.info("Generating images for date: %s", date_to_generate_for)
     generate_for_date(date_to_generate_for)
-    check_in()
 
 
 if __name__ == "__main__":

@@ -12,26 +12,24 @@ class ImagesForWeb(BaseModel):
 
 
 def generate_images_for_web(filename: str) -> ImagesForWeb:
-    jpeg_path = None
-    webp_path = None
-    jpeg_filename = None
-    webp_filename = None
     output_uuid = str(uuid4())
+    jpeg_filename = f"{output_uuid}.jpg"
+    webp_filename = f"{output_uuid}.webp"
+    jpeg_path = f"/tmp/{jpeg_filename}"
+    webp_path = f"/tmp/{webp_filename}"
 
     with Image(filename=filename) as img:
-        for file_format in ["jpg", "webp"]:
-            with img.clone() as i:
-                output_name = f"{output_uuid}.{file_format}"
-                output_path = f"/tmp/output_name"
-                i.resize(800, 800)
-                i.format = file_format
-                i.save(filename=output_path)
-                if file_format == "jpg":
-                    jpeg_path = output_path
-                    jpeg_filename = output_name
-                else:
-                    webp_path = output_path
-                    webp_filename = output_name
+        # Generate JPEG
+        with img.clone() as i:
+            i.resize(800, 800)
+            i.format = "jpg"
+            i.save(filename=jpeg_path)
+
+        # Generate WebP
+        with img.clone() as i:
+            i.resize(800, 800)
+            i.format = "webp"
+            i.save(filename=webp_path)
 
     return ImagesForWeb(
         jpeg_path=jpeg_path,

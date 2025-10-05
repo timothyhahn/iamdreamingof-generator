@@ -1,11 +1,11 @@
 import os
 
-import botocore
 import boto3
 import requests
+from botocore.config import Config
 
 ENDPOINT_URL = "https://nyc3.digitaloceanspaces.com"
-CONFIG = botocore.config.Config(s3={"addressing_style": "virtual"})
+CONFIG = Config(s3={"addressing_style": "virtual"})
 REGION = "nyc3"
 CDN_ACCESS_KEY_ID = os.environ["CDN_ACCESS_KEY_ID"]
 CDN_SECRET_ACCESS_KEY = os.environ["CDN_SECRET_ACCESS_KEY"]

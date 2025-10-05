@@ -7,7 +7,7 @@ import requests
 def get_headers() -> dict:
     return {
         "Content-Type": "application/json",
-        "Authorization": f'Bearer {os.environ["AI_API_KEY"]}',
+        "Authorization": f"Bearer {os.environ['AI_API_KEY']}",
     }
 
 
@@ -29,10 +29,7 @@ def generate_prompt(words: list[str]) -> str:
     data = {
         "model": "gpt-4",
         "messages": [
-            {
-                "role": "system",
-                "content": instructions
-            },
+            {"role": "system", "content": instructions},
             {"role": "user", "content": ", ".join(words)},
         ],
     }

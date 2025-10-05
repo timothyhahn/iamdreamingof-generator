@@ -1,4 +1,4 @@
-FROM python:3.11-buster
+FROM python:3.11-trixie
 LABEL authors="tmhhn"
 
 # Install image processing libraries
@@ -8,17 +8,19 @@ RUN apt-get update -y \
     && apt-get autoremove -y \
     && apt-get clean -y
 
-
-# Actual Python stuff
-RUN pip install poetry==1.7.0
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 WORKDIR /app
 
-COPY pyproject.toml poetry.lock ./
+# Copy dependency files
+COPY pyproject.toml uv.lock ./
 COPY *.py *.json ./
 
-# Poetry won't run without a README, let's create a fake one
-RUN touch README.md
-RUN poetry install --no-root
+RUN touch README.md # lol
 
-CMD ["poetry", "run", "python", "main.py"]
+# Install dependencies using uv sync
+RUN uv sync --frozen --no-dev
+
+# Use uv to run the app
+CMD ["/usr/local/bin/uv", "run", "python", "main.py"]
