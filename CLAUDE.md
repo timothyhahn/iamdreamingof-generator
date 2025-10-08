@@ -4,105 +4,138 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is the generator code for iamdreamingof.com, a daily AI-generated dream challenge service. The application:
+This is the generator code for iamdreamingof.com, a daily AI-generated dream challenge service written in Rust. The application:
 - Generates sets of words with varying difficulty levels (Easy, Medium, Hard, Dreaming)
 - Creates dream-like prompts using GPT-4 based on word combinations
 - Generates images using DALL-E 3 from the prompts
 - Processes and optimizes images for web (JPEG and WebP formats)
 - Uploads content to DigitalOcean Spaces CDN
-- Runs as a Kubernetes CronJob once daily
+- Runs as a scheduled job on Fly.io
 
 ## Development Commands
 
-### UV Commands
+### Building and Running
+
 ```bash
-# Install dependencies (creates venv automatically)
-uv sync
+# Build the project
+cargo build
 
-# Install with dev dependencies
-uv sync --dev
+# Build for release
+cargo build --release
 
-# Run the main generator
-uv run python main.py
+# Run the application
+cargo run
 
-# Add a new dependency
-uv add <package-name>
+# Run with a specific date
+cargo run -- 2024-01-15
 
-# Add a new dev dependency
-uv add --dev <package-name>
-
-# Update all dependencies
-uv lock --upgrade
-
-# Update a specific dependency
-uv lock --upgrade-package <package-name>
-
-# Remove a dependency
-uv remove <package-name>
+# Check code without building
+cargo check
 ```
 
-### Linting and Type Checking
+### Testing
+
 ```bash
-# Run Ruff linter and formatter (auto-fix)
-ruff check --fix .
-ruff format .
+# Run all tests
+cargo test
 
-# Run type checker (ty)
-ty check .
+# Run tests with output
+cargo test -- --nocapture
 
-# Run both Ruff and ty
-ruff check --fix . && ruff format . && ty check .
+# Run unit tests only
+cargo test --lib
+
+# Run integration tests only
+cargo test --test integration
+
+# Run specific test
+cargo test test_word_selection
+
+# Run tests with coverage (requires cargo-tarpaulin)
+cargo tarpaulin
+```
+
+### Code Quality
+
+```bash
+# Format code
+cargo fmt
+
+# Run linter
+cargo clippy
+
+# Fix linting issues
+cargo clippy --fix
 ```
 
 ### Docker Commands
+
 ```bash
 # Build the Docker image
 docker build -t iamdreamingof-generator .
 
-# Run the Docker container locally (requires environment variables)
+# Run the container locally (requires environment variables)
 docker run --env-file .env iamdreamingof-generator
 ```
 
-### Kubernetes Deployment
-```bash
-# Apply the CronJob configuration
-kubectl apply -f k8s/cronjob.yaml
+## Architecture
 
-# Check CronJob status
-kubectl get cronjobs -n iamdreamingof
-
-# View recent job runs
-kubectl get jobs -n iamdreamingof
+### Project Structure
+```
+src/
+├── main.rs           # Entry point and orchestration
+├── lib.rs            # Library root
+├── models.rs         # Data structures (Day, Challenge, Word, etc.)
+├── words.rs          # Word selection logic
+├── error.rs          # Error types
+├── ai/
+│   ├── mod.rs        # AI module interface
+│   ├── client.rs     # OpenAI client implementation
+│   └── mock.rs       # Mock implementation for testing
+├── cdn/
+│   ├── mod.rs        # CDN module interface
+│   ├── client.rs     # S3/Spaces client implementation
+│   └── mock.rs       # Mock implementation for testing
+└── image/
+    ├── mod.rs        # Image processing interface
+    ├── processor.rs  # Image processing implementation
+    └── mock.rs       # Mock implementation for testing
 ```
 
-## Core Architecture
+### Key Design Principles
+
+1. **Dependency Injection**: All external services (OpenAI, S3, ImageMagick) are behind traits, allowing for easy mocking in tests
+2. **Type Safety**: Strong typing throughout with serde for serialization
+3. **Error Handling**: Comprehensive error types with thiserror
+4. **Async/Await**: Fully async implementation using Tokio
+5. **Testability**: Every module includes unit tests, with mocks for external dependencies
 
 ### Main Components
 
-1. **main.py**: Entry point that orchestrates the entire generation process
+1. **main.rs**: Entry point that orchestrates the entire generation process
    - Fetches existing days.json from CDN
    - Generates unique ID for the day
    - Creates challenges for all difficulty levels
    - Uploads results to CDN
    - Updates today.json if generating for current day
 
-2. **words.py**: Word selection logic
+2. **words.rs**: Word selection logic
    - Easy: 3 random objects
    - Medium: 2 objects + 1 gerund
    - Hard: 1 object + 2 gerunds
    - Dreaming: 1 object + 1 gerund + 1 concept
    - Ensures all 12 words across difficulties are unique
 
-3. **ai.py**: OpenAI API integration
+3. **ai module**: OpenAI API integration
    - `generate_prompt()`: Creates dream descriptions using GPT-4
    - `generate_image()`: Generates images using DALL-E 3
 
-4. **image.py**: Image processing
+4. **image module**: Image processing
    - Resizes images to 800x800
    - Converts to both JPEG and WebP formats
    - Returns paths for CDN upload
 
-5. **cdn.py**: DigitalOcean Spaces integration
+5. **cdn module**: DigitalOcean Spaces integration
    - Uploads files to CDN with public-read ACL
    - Reads JSON files from CDN
 
@@ -115,20 +148,45 @@ kubectl get jobs -n iamdreamingof
 5. Upload to CDN (images and JSON data)
 6. Update days.json index and today.json if applicable
 
-### Environment Variables Required
+## Environment Variables Required
 
 - `AI_API_KEY`: OpenAI API key
 - `CDN_ACCESS_KEY_ID`: DigitalOcean Spaces access key
 - `CDN_SECRET_ACCESS_KEY`: DigitalOcean Spaces secret key
-- `LOGTAIL_SOURCE_TOKEN`: Logtail logging token
-- `ROLLBAR_ACCESS_TOKEN`: Rollbar error tracking token
-- `ROLLBAR_ENVIRONMENT`: Environment name for Rollbar
-- `HONEYBADGER_API_KEY`: Honeybadger monitoring API key
-- `HONEYBADGER_CHECKIN_ID`: Honeybadger check-in ID
+- `CDN_ENDPOINT`: (Optional) DigitalOcean Spaces endpoint (defaults to https://nyc3.digitaloceanspaces.com)
+- `CDN_BUCKET`: (Optional) S3 bucket name (defaults to "iamdreamingof")
+- `CDN_BASE_URL`: (Optional) CDN base URL (defaults to https://cdn.iamdreamingof.com)
 
-### Error Handling
+## Error Handling
 
-- Uses Tenacity for retry logic (3 attempts with 2-minute waits)
-- Rollbar and Honeybadger for error tracking
-- Logtail for centralized logging
-- Honeybadger check-in on successful completion
+- Uses tokio-retry for retry logic (3 attempts with 2-minute waits)
+- Comprehensive error types with thiserror
+- Structured logging with tracing
+- Graceful fallbacks for missing configuration
+
+## Testing Strategy
+
+```bash
+# Run unit tests only
+cargo test --lib
+
+# Run integration tests only
+cargo test --test '*'
+
+# Run specific test
+cargo test test_word_selection
+
+# Run tests with coverage (requires cargo-tarpaulin)
+cargo tarpaulin
+```
+
+### Mock Implementations
+
+Each external service has a mock implementation for testing:
+- `MockAiClient`: Simulates OpenAI API responses
+- `MockCdnClient`: Simulates S3/CDN operations in memory
+- `MockImageProcessor`: Simulates image processing without actual file I/O
+
+## Deployment
+
+The application is deployed as a scheduled job on Fly.io. The Docker image uses Debian Trixie for ImageMagick 7 support.
