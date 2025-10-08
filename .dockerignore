@@ -1,6 +1,5 @@
 # Rust build artifacts
 target/
-Cargo.lock
 
 # Python artifacts (from existing project)
 __pycache__/
