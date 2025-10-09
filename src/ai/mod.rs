@@ -17,4 +17,5 @@ use async_trait::async_trait;
 pub trait AiService: Send + Sync {
     async fn generate_prompt(&self, words: &[Word]) -> Result<String>;
     async fn generate_image(&self, prompt: &str, words: &[Word]) -> Result<Vec<u8>>;
+    async fn detect_text(&self, image_bytes: &[u8]) -> Result<bool>;
 }

@@ -103,12 +103,57 @@ pub struct ChatCompletionRequest {
     pub model: String,
     pub messages: Vec<ChatMessage>,
     pub max_completion_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_format: Option<ResponseFormat>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct ResponseFormat {
+    #[serde(rename = "type")]
+    pub format_type: String, // "json_schema" for structured output
+    pub json_schema: JsonSchema,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct JsonSchema {
+    pub name: String,
+    pub schema: serde_json::Value,
+    pub strict: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ChatMessageContent {
+    Text(String),
+    ImageContent(Vec<MessagePart>),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MessagePart {
+    #[serde(rename = "type")]
+    pub part_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_url: Option<ImageUrl>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ImageUrl {
+    pub url: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: String,
-    pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<ChatMessageContent>,
+}
+
+// Text detection response structure
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TextDetectionResponse {
+    pub includes_text: bool,
 }
 
 #[derive(Debug, Deserialize)]

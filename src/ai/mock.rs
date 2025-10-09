@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 pub struct MockAiClient {
     prompt_responses: Arc<Mutex<Vec<String>>>,
     image_responses: Arc<Mutex<Vec<Vec<u8>>>>,
+    text_detection_responses: Arc<Mutex<Vec<bool>>>,
     call_count: Arc<Mutex<usize>>,
 }
 
@@ -15,6 +16,7 @@ impl MockAiClient {
         Self {
             prompt_responses: Arc::new(Mutex::new(Vec::new())),
             image_responses: Arc::new(Mutex::new(Vec::new())),
+            text_detection_responses: Arc::new(Mutex::new(Vec::new())),
             call_count: Arc::new(Mutex::new(0)),
         }
     }
@@ -26,6 +28,11 @@ impl MockAiClient {
 
     pub fn with_image_response(self, response: Vec<u8>) -> Self {
         self.image_responses.lock().unwrap().push(response);
+        self
+    }
+
+    pub fn with_text_detection_response(self, has_text: bool) -> Self {
+        self.text_detection_responses.lock().unwrap().push(has_text);
         self
     }
 
@@ -77,6 +84,20 @@ impl AiService for MockAiClient {
         } else {
             let index = (*count - 1) % responses.len();
             Ok(responses[index].clone())
+        }
+    }
+
+    async fn detect_text(&self, _image_bytes: &[u8]) -> Result<bool> {
+        let mut count = self.call_count.lock().unwrap();
+        *count += 1;
+
+        let responses = self.text_detection_responses.lock().unwrap();
+        if responses.is_empty() {
+            // Default to no text detected
+            Ok(false)
+        } else {
+            let index = (*count - 1) % responses.len();
+            Ok(responses[index])
         }
     }
 }
@@ -134,5 +155,30 @@ mod tests {
 
         client.generate_image("test", &[]).await.unwrap();
         assert_eq!(client.get_call_count(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_mock_ai_client_text_detection_default() {
+        let client = MockAiClient::new();
+
+        // Default should be no text detected
+        let has_text = client.detect_text(&[]).await.unwrap();
+        assert!(!has_text);
+    }
+
+    #[tokio::test]
+    async fn test_mock_ai_client_text_detection_custom() {
+        let client = MockAiClient::new()
+            .with_text_detection_response(true)
+            .with_text_detection_response(false)
+            .with_text_detection_response(true);
+
+        // Should return configured responses in order
+        assert!(client.detect_text(&[]).await.unwrap());
+        assert!(!client.detect_text(&[]).await.unwrap());
+        assert!(client.detect_text(&[]).await.unwrap());
+
+        // Should cycle back
+        assert!(client.detect_text(&[]).await.unwrap());
     }
 }

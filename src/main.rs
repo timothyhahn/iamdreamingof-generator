@@ -216,12 +216,43 @@ impl App {
             prompt
         );
 
-        let image_data = self.ai.generate_image(&prompt, words).await?;
-        info!(
-            "[{}] Generated image ({} bytes)",
-            difficulty,
-            image_data.len()
-        );
+        // Try to generate an image without text (up to 3 attempts)
+        const MAX_IMAGE_ATTEMPTS: usize = 3;
+        let mut image_data;
+        let mut attempt = 0;
+
+        loop {
+            attempt += 1;
+            image_data = self.ai.generate_image(&prompt, words).await?;
+            info!(
+                "[{}] Generated image ({} bytes) - attempt {}/{}",
+                difficulty,
+                image_data.len(),
+                attempt,
+                MAX_IMAGE_ATTEMPTS
+            );
+
+            // Check if the image contains text
+            let has_text = self.ai.detect_text(&image_data).await?;
+
+            if !has_text {
+                info!("[{}] Image passed text detection check", difficulty);
+                break;
+            } else if attempt >= MAX_IMAGE_ATTEMPTS {
+                warn!(
+                    "[{}] Image contains text after {} attempts, proceeding anyway",
+                    difficulty, MAX_IMAGE_ATTEMPTS
+                );
+                break;
+            } else {
+                warn!(
+                    "[{}] Image contains text, retrying generation (attempt {}/{})",
+                    difficulty, attempt, MAX_IMAGE_ATTEMPTS
+                );
+                // Small delay before retry
+                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+            }
+        }
 
         let processed = self.image.process_image(&image_data, difficulty).await?;
 

@@ -1,0 +1,15 @@
+# Project-specific Cargo configuration
+
+[alias]
+# Run clippy with the same flags as pre-commit hook
+clippy-strict = "clippy --all-targets --all-features -- -D warnings"
+
+# Shorthand aliases
+cs = "clippy --all-targets --all-features -- -D warnings"  # clippy strict
+c = "clippy --all-targets --all-features"                   # clippy normal
+
+# Other useful aliases
+t = "test"
+b = "build"
+br = "build --release"
+r = "run"
