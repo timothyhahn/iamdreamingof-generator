@@ -12,7 +12,7 @@ reqwest = { version = "0.12", features = ["json", "stream"] }
 
 # AWS SDK for S3 (DigitalOcean Spaces compatible)
 aws-config = "1.5"
-aws-sdk-s3 = "1.62"
+aws-sdk-s3 = "1.109"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
