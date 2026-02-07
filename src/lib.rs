@@ -8,6 +8,7 @@ pub mod cdn;
 pub mod error;
 pub mod image;
 pub mod models;
+pub mod prompts;
 pub mod words;
 
 pub use error::{Error, Result};

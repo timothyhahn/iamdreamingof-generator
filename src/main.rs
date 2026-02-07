@@ -1,10 +1,14 @@
 use anyhow::Result;
 use chrono::{Local, NaiveDate};
 use iamdreamingof_generator::{
-    ai::{AiClient, AiService},
-    cdn::{CdnClient, CdnService},
+    ai::{
+        ChatService, GeminiChatClient, GeminiImageClient, GeminiImageQaClient,
+        ImageGenerationService, ImageQaService, OpenAiChatClient, OpenAiImageClient,
+        OpenAiImageQaClient,
+    },
+    cdn::{CdnClient, CdnService, MockCdnClient},
     image::{ImageProcessor, ImageService},
-    models::{Challenge, Challenges, Config, Day, Days, Word},
+    models::{AiProvider, Challenge, Challenges, Config, Day, Days, Word},
     words::WordSelector,
 };
 use std::fs;
@@ -15,18 +19,20 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
 
 struct App {
-    ai: Box<dyn AiService>,
+    chat: Box<dyn ChatService>,
+    image_gen: Box<dyn ImageGenerationService>,
+    image_qa: Box<dyn ImageQaService>,
     cdn: Box<dyn CdnService>,
     image: Box<dyn ImageService>,
     word_selector: WordSelector,
     output_dir: PathBuf,
+    dry_run: bool,
 }
 
 impl App {
     async fn new() -> Result<Self> {
         let config = Config::from_env()?;
 
-        // Create output directory with date and UUID
         let date = Local::now().format("%Y-%m-%d").to_string();
         let session_id = Uuid::new_v4();
         let output_dir = PathBuf::from("output").join(format!("{}_{}", date, session_id));
@@ -34,29 +40,91 @@ impl App {
         fs::create_dir_all(&output_dir)?;
         info!("Created output directory: {}", output_dir.display());
 
-        let ai = Box::new(AiClient::new(config.openai_api_key.clone()));
+        let chat: Box<dyn ChatService> = match config.chat_provider {
+            AiProvider::OpenAi => {
+                let key = config.openai_api_key.as_ref().unwrap();
+                info!("Chat provider: OpenAI (model: {})", config.chat_model);
+                Box::new(OpenAiChatClient::new(
+                    key.clone(),
+                    config.chat_model.clone(),
+                ))
+            }
+            AiProvider::Gemini => {
+                let key = config.gemini_api_key.as_ref().unwrap();
+                info!("Chat provider: Gemini (model: {})", config.chat_model);
+                Box::new(GeminiChatClient::new(
+                    key.clone(),
+                    config.chat_model.clone(),
+                ))
+            }
+        };
 
-        let cdn = Box::new(
-            CdnClient::new(
-                config.cdn_access_key_id.clone(),
-                config.cdn_secret_access_key.clone(),
-                config.cdn_endpoint.clone(),
-                config.cdn_bucket.clone(),
-                config.cdn_base_url.clone(),
+        let image_gen: Box<dyn ImageGenerationService> = match config.image_provider {
+            AiProvider::OpenAi => {
+                let key = config.openai_api_key.as_ref().unwrap();
+                info!("Image provider: OpenAI (model: {})", config.image_model);
+                Box::new(OpenAiImageClient::new(
+                    key.clone(),
+                    config.image_model.clone(),
+                ))
+            }
+            AiProvider::Gemini => {
+                let key = config.gemini_api_key.as_ref().unwrap();
+                info!("Image provider: Gemini (model: {})", config.image_model);
+                Box::new(GeminiImageClient::new(
+                    key.clone(),
+                    config.image_model.clone(),
+                ))
+            }
+        };
+
+        let image_qa: Box<dyn ImageQaService> = match config.qa_provider {
+            AiProvider::OpenAi => {
+                let key = config.openai_api_key.as_ref().unwrap();
+                info!("QA provider: OpenAI (model: {})", config.qa_model);
+                Box::new(OpenAiImageQaClient::new(
+                    key.clone(),
+                    config.qa_model.clone(),
+                ))
+            }
+            AiProvider::Gemini => {
+                let key = config.gemini_api_key.as_ref().unwrap();
+                info!("QA provider: Gemini (model: {})", config.qa_model);
+                Box::new(GeminiImageQaClient::new(
+                    key.clone(),
+                    config.qa_model.clone(),
+                ))
+            }
+        };
+
+        let cdn: Box<dyn CdnService> = if config.dry_run {
+            info!("DRY_RUN enabled — CDN uploads will be skipped");
+            Box::new(MockCdnClient::new().with_base_url(config.cdn_base_url.clone()))
+        } else {
+            Box::new(
+                CdnClient::new(
+                    config.cdn_access_key_id.clone().unwrap(),
+                    config.cdn_secret_access_key.clone().unwrap(),
+                    config.cdn_endpoint.clone(),
+                    config.cdn_bucket.clone(),
+                    config.cdn_base_url.clone(),
+                )
+                .await?,
             )
-            .await?,
-        );
+        };
 
         let image = Box::new(ImageProcessor::new(&output_dir)?);
-
         let word_selector = WordSelector::from_files(Path::new("data"))?;
 
         Ok(Self {
-            ai,
+            chat,
+            image_gen,
+            image_qa,
             cdn,
             image,
             word_selector,
             output_dir,
+            dry_run: config.dry_run,
         })
     }
 
@@ -66,13 +134,16 @@ impl App {
 
         info!("Generating content for date: {}", date_str);
 
-        // Get existing days from CDN
-        let mut days = self.fetch_days().await.unwrap_or_else(|e| {
-            warn!("Could not fetch existing days.json: {}. Starting fresh.", e);
+        // In dry-run mode, start with fresh days
+        let mut days = if self.dry_run {
             Days::new()
-        });
+        } else {
+            self.fetch_days().await.unwrap_or_else(|e| {
+                warn!("Could not fetch existing days.json: {}. Starting fresh.", e);
+                Days::new()
+            })
+        };
 
-        // Determine the ID for this day
         let id = if let Some(existing) = days.find_by_date(&date_str) {
             info!("Reusing existing ID {} for date {}", existing.id, date_str);
             existing.id
@@ -82,8 +153,7 @@ impl App {
             new_id
         };
 
-        // Generate content with retry
-        let retry_strategy = FixedInterval::from_millis(2000).take(3); // 2 second waits for testing, 3 attempts
+        let retry_strategy = FixedInterval::from_millis(2000).take(3);
 
         let day = match Retry::spawn(retry_strategy.clone(), || async {
             info!("Attempting to generate day content...");
@@ -100,12 +170,10 @@ impl App {
             Ok(day) => day,
             Err(e) => {
                 error!("Failed to generate day after all retries: {}", e);
-                error!("Exiting due to generation failure");
                 return Err(e);
             }
         };
 
-        // Upload day JSON
         let day_json = serde_json::to_string_pretty(&day)?;
         let day_key = format!("days/{}.json", date_str);
         self.cdn
@@ -113,7 +181,6 @@ impl App {
             .await?;
         info!("Uploaded day data to {}", day_key);
 
-        // Also save JSON locally in the output directory
         let json_path = self.output_dir.join(format!("{}.json", date_str));
         fs::write(&json_path, &day_json)?;
         info!("Saved JSON locally at: {}", json_path.display());
@@ -128,7 +195,6 @@ impl App {
             info!("Updated days.json index");
         }
 
-        // Update today.json if generating for current date
         let today = Local::now().date_naive();
         if date == today {
             self.cdn
@@ -149,7 +215,6 @@ impl App {
     async fn generate_day(&self, date: &str, id: i32) -> Result<Day> {
         info!("Generating challenges for date {}", date);
 
-        // Generate word sets
         let word_sets = self.word_selector.select_words()?;
 
         let (easy, medium, hard, dreaming) = tokio::join!(
@@ -208,7 +273,7 @@ impl App {
     async fn create_challenge(&self, words: &[Word], difficulty: &str) -> Result<Challenge> {
         info!("[{}] Creating challenge", difficulty);
 
-        let prompt = self.ai.generate_prompt(words).await?;
+        let prompt = self.chat.generate_prompt(words).await?;
         info!(
             "[{}] Generated prompt ({} chars): {}",
             difficulty,
@@ -216,14 +281,13 @@ impl App {
             prompt
         );
 
-        // Try to generate an image without text (up to 3 attempts)
         const MAX_IMAGE_ATTEMPTS: usize = 3;
         let mut image_data;
         let mut attempt = 0;
 
         loop {
             attempt += 1;
-            image_data = self.ai.generate_image(&prompt, words).await?;
+            image_data = self.image_gen.generate_image(&prompt, words).await?;
             info!(
                 "[{}] Generated image ({} bytes) - attempt {}/{}",
                 difficulty,
@@ -232,8 +296,7 @@ impl App {
                 MAX_IMAGE_ATTEMPTS
             );
 
-            // Check if the image contains text
-            let has_text = self.ai.detect_text(&image_data).await?;
+            let has_text = self.image_qa.detect_text(&image_data).await?;
 
             if !has_text {
                 info!("[{}] Image passed text detection check", difficulty);
@@ -249,14 +312,12 @@ impl App {
                     "[{}] Image contains text, retrying generation (attempt {}/{})",
                     difficulty, attempt, MAX_IMAGE_ATTEMPTS
                 );
-                // Small delay before retry
                 tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
             }
         }
 
         let processed = self.image.process_image(&image_data, difficulty).await?;
 
-        // Read processed files and upload to CDN
         let jpeg_data = std::fs::read(&processed.jpeg_path)?;
         let webp_data = std::fs::read(&processed.webp_path)?;
 
@@ -284,7 +345,6 @@ impl App {
             .await?;
 
         info!("[{}] Uploaded images to CDN", difficulty);
-
         info!(
             "[{}] Images saved locally at: {} and {}",
             difficulty, processed.jpeg_path, processed.webp_path
@@ -312,7 +372,6 @@ async fn main() -> Result<()> {
 
     info!("Starting iamdreamingof-generator");
 
-    // Parse command line arguments
     let args: Vec<String> = std::env::args().collect();
     let target_date = if args.len() > 1 {
         Some(NaiveDate::parse_from_str(&args[1], "%Y-%m-%d")?)

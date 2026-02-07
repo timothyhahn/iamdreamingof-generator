@@ -1,0 +1,13 @@
+Create a surreal, dreamlike digital artwork based on this scene: {{prompt}}
+
+VISUAL REQUIREMENTS:
+- Must include visual representations of: [{{words}}]
+- Each word must be clearly identifiable in the image
+- Style: Ethereal, soft lighting, mystical atmosphere, dreamlike quality
+- Composition: Balanced, visually cohesive
+- Color palette: Otherworldly, harmonious
+
+STRICT RULES:
+- DO NOT include any text, words, letters, or writing in the image
+- NO TEXT OVERLAYS OR LABELS
+- Visual elements only

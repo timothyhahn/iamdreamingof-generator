@@ -1,0 +1,1 @@
+Does this image contain any text, letters, words, or writing? Respond with true if any text is present, false if it's purely visual with no text.

@@ -9,6 +9,14 @@ kill_timeout = 300
 
 [build]
 
+[env]
+  CHAT_PROVIDER = "openai"
+  CHAT_MODEL = "gpt-5"
+  IMAGE_PROVIDER = "gemini"
+  IMAGE_MODEL = "gemini-3-pro-image-preview"
+  QA_PROVIDER = "openai"
+  QA_MODEL = "gpt-4o-mini"
+
 [[vm]]
   memory = '512mb'
   cpu_kind = 'shared'

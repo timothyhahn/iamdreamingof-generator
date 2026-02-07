@@ -21,8 +21,8 @@ pub enum Error {
     #[error("Image processing error: {0}")]
     Image(#[from] image::ImageError),
 
-    #[error("OpenAI API error: {0}")]
-    OpenAI(String),
+    #[error("AI provider error: {0}")]
+    AiProvider(String),
 
     #[error("Word selection error: {0}")]
     WordSelection(String),
@@ -35,6 +35,9 @@ pub enum Error {
 
     #[error("Date parsing error: {0}")]
     DateParse(String),
+
+    #[error("Configuration error: {0}")]
+    Config(String),
 
     #[error("Generic error: {0}")]
     Generic(String),

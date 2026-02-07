@@ -1,5 +1,8 @@
 use iamdreamingof_generator::{
-    ai::{AiService, MockAiClient},
+    ai::{
+        ChatService, ImageGenerationService, ImageQaService, MockChatClient,
+        MockImageGenerationClient, MockImageQaClient,
+    },
     cdn::{CdnService, MockCdnClient},
     image::{ImageService, MockImageProcessor},
     models::{Challenge, Challenges, Day, Days, Word, WordType},
@@ -7,18 +10,15 @@ use iamdreamingof_generator::{
 
 #[tokio::test]
 async fn test_full_workflow_with_mocks() {
-    // Setup mock AI client
-    let ai_client = MockAiClient::new()
-        .with_prompt_response("A dreamlike scene with floating apples".to_string())
-        .with_image_response(vec![0x89, 0x50, 0x4E, 0x47]); // PNG header
+    let chat = MockChatClient::new()
+        .with_prompt_response("A dreamlike scene with floating apples".to_string());
+    let image_gen =
+        MockImageGenerationClient::new().with_image_response(vec![0x89, 0x50, 0x4E, 0x47]);
+    let image_qa = MockImageQaClient::new();
 
-    // Setup mock CDN client
-    let cdn_client = MockCdnClient::new().with_base_url("https://test-cdn.com".to_string());
-
-    // Setup mock image processor
+    let cdn = MockCdnClient::new().with_base_url("https://test-cdn.com".to_string());
     let image_processor = MockImageProcessor::new().with_base_path("/test".to_string());
 
-    // Create test words
     let words = vec![
         Word {
             word: "apple".to_string(),
@@ -30,15 +30,19 @@ async fn test_full_workflow_with_mocks() {
         },
     ];
 
-    // Test prompt generation
-    let prompt = ai_client.generate_prompt(&words).await.unwrap();
+    // Chat generates prompt
+    let prompt = chat.generate_prompt(&words).await.unwrap();
     assert!(prompt.contains("floating apples"));
 
-    // Test image generation
-    let image_data = ai_client.generate_image(&prompt, &words).await.unwrap();
+    // Image gen creates image bytes
+    let image_data = image_gen.generate_image(&prompt, &words).await.unwrap();
     assert!(!image_data.is_empty());
 
-    // Test image processing
+    // QA checks for text
+    let has_text = image_qa.detect_text(&image_data).await.unwrap();
+    assert!(!has_text);
+
+    // Image processor resizes/converts
     let processed = image_processor
         .process_image(&image_data, "test")
         .await
@@ -46,8 +50,8 @@ async fn test_full_workflow_with_mocks() {
     assert!(processed.jpeg_path.ends_with(".jpg"));
     assert!(processed.webp_path.ends_with(".webp"));
 
-    // Test CDN upload
-    let url = cdn_client
+    // CDN upload
+    let url = cdn
         .upload_file("test.jpg", b"fake image", "image/jpeg")
         .await
         .unwrap();
@@ -56,21 +60,18 @@ async fn test_full_workflow_with_mocks() {
 
 #[tokio::test]
 async fn test_days_json_handling() {
-    let cdn_client = MockCdnClient::new();
+    let cdn = MockCdnClient::new();
 
-    // Test uploading days.json
     let mut days = Days::new();
     days.add_day("2024-01-01".to_string(), 1);
     days.add_day("2024-01-02".to_string(), 2);
 
     let days_json = serde_json::to_string(&days).unwrap();
-    cdn_client
-        .upload_file("days.json", days_json.as_bytes(), "application/json")
+    cdn.upload_file("days.json", days_json.as_bytes(), "application/json")
         .await
         .unwrap();
 
-    // Test reading back
-    let retrieved_json = cdn_client.read_json("days.json").await.unwrap();
+    let retrieved_json = cdn.read_json("days.json").await.unwrap();
     let retrieved_days: Days = serde_json::from_str(&retrieved_json).unwrap();
 
     assert_eq!(retrieved_days.days.len(), 2);
@@ -102,7 +103,6 @@ async fn test_challenge_serialization() {
         "A dreamlike scene of flying mountains symbolizing freedom".to_string(),
     );
 
-    // Serialize and deserialize
     let json = serde_json::to_string(&challenge).unwrap();
     let deserialized: Challenge = serde_json::from_str(&json).unwrap();
 
@@ -112,95 +112,44 @@ async fn test_challenge_serialization() {
 }
 
 #[tokio::test]
-async fn test_error_handling_with_retry() {
-    // Create a mock that fails once then succeeds
-    let ai_client = MockAiClient::new().with_prompt_response("Success after retry".to_string());
+async fn test_chat_returns_configured_response() {
+    let chat = MockChatClient::new().with_prompt_response("Custom dream scene".to_string());
 
     let words = vec![Word {
         word: "test".to_string(),
         word_type: WordType::Object,
     }];
 
-    // Should succeed even with initial failure
-    let prompt = ai_client.generate_prompt(&words).await.unwrap();
-    assert_eq!(prompt, "Success after retry");
+    let prompt = chat.generate_prompt(&words).await.unwrap();
+    assert_eq!(prompt, "Custom dream scene");
 }
 
 #[tokio::test]
 async fn test_cdn_file_existence_check() {
-    let cdn_client =
-        MockCdnClient::new().with_file("existing.json".to_string(), b"content".to_vec());
+    let cdn = MockCdnClient::new().with_file("existing.json".to_string(), b"content".to_vec());
 
-    assert!(cdn_client.file_exists("existing.json").await.unwrap());
-    assert!(!cdn_client.file_exists("missing.json").await.unwrap());
+    assert!(cdn.file_exists("existing.json").await.unwrap());
+    assert!(!cdn.file_exists("missing.json").await.unwrap());
 }
 
 #[tokio::test]
-async fn test_multiple_challenges_generation() {
-    let ai_client = MockAiClient::new()
+async fn test_multiple_prompts_generation() {
+    let chat = MockChatClient::new()
         .with_prompt_response("Easy dream".to_string())
         .with_prompt_response("Medium dream".to_string())
         .with_prompt_response("Hard dream".to_string())
         .with_prompt_response("Dreaming dream".to_string());
 
-    let easy_words = vec![Word {
-        word: "apple".to_string(),
-        word_type: WordType::Object,
-    }];
-
-    let medium_words = vec![
-        Word {
-            word: "banana".to_string(),
-            word_type: WordType::Object,
-        },
-        Word {
-            word: "running".to_string(),
-            word_type: WordType::Gerund,
-        },
-    ];
-
-    let hard_words = vec![
-        Word {
-            word: "car".to_string(),
-            word_type: WordType::Object,
-        },
-        Word {
-            word: "jumping".to_string(),
-            word_type: WordType::Gerund,
-        },
-        Word {
-            word: "swimming".to_string(),
-            word_type: WordType::Gerund,
-        },
-    ];
-
-    let dreaming_words = vec![
-        Word {
-            word: "desk".to_string(),
-            word_type: WordType::Object,
-        },
-        Word {
-            word: "dancing".to_string(),
-            word_type: WordType::Gerund,
-        },
-        Word {
-            word: "love".to_string(),
-            word_type: WordType::Concept,
-        },
-    ];
-
-    // Generate prompts for each difficulty
-    let easy_prompt = ai_client.generate_prompt(&easy_words).await.unwrap();
-    let medium_prompt = ai_client.generate_prompt(&medium_words).await.unwrap();
-    let hard_prompt = ai_client.generate_prompt(&hard_words).await.unwrap();
-    let dreaming_prompt = ai_client.generate_prompt(&dreaming_words).await.unwrap();
+    let easy_prompt = chat.generate_prompt(&[]).await.unwrap();
+    let medium_prompt = chat.generate_prompt(&[]).await.unwrap();
+    let hard_prompt = chat.generate_prompt(&[]).await.unwrap();
+    let dreaming_prompt = chat.generate_prompt(&[]).await.unwrap();
 
     assert_eq!(easy_prompt, "Easy dream");
     assert_eq!(medium_prompt, "Medium dream");
     assert_eq!(hard_prompt, "Hard dream");
     assert_eq!(dreaming_prompt, "Dreaming dream");
-
-    assert_eq!(ai_client.get_call_count(), 4);
+    assert_eq!(chat.get_call_count(), 4);
 }
 
 #[tokio::test]
@@ -218,13 +167,33 @@ async fn test_day_json_structure() {
 
     let json = serde_json::to_string_pretty(&day).unwrap();
 
-    // Verify JSON contains expected fields
     assert!(json.contains("\"date\": \"2024-01-15\""));
     assert!(json.contains("\"id\": 42"));
     assert!(json.contains("\"easy\""));
     assert!(json.contains("\"medium\""));
     assert!(json.contains("\"hard\""));
     assert!(json.contains("\"dreaming\""));
+}
+
+/// Simulate the image QA retry loop: first image has text, second is clean.
+#[tokio::test]
+async fn test_image_qa_retry_flow() {
+    let chat = MockChatClient::new().with_prompt_response("A dreamy scene".to_string());
+    let image_gen = MockImageGenerationClient::new();
+    let qa = MockImageQaClient::new()
+        .with_text_detection_response(true)
+        .with_text_detection_response(false);
+
+    let prompt = chat.generate_prompt(&[]).await.unwrap();
+
+    let img1 = image_gen.generate_image(&prompt, &[]).await.unwrap();
+    assert!(qa.detect_text(&img1).await.unwrap());
+
+    let img2 = image_gen.generate_image(&prompt, &[]).await.unwrap();
+    assert!(!qa.detect_text(&img2).await.unwrap());
+
+    assert_eq!(image_gen.get_call_count(), 2);
+    assert_eq!(qa.get_call_count(), 2);
 }
 
 fn create_test_challenge(difficulty: &str) -> Challenge {

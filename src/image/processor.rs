@@ -2,6 +2,7 @@ use super::{ImageService, ProcessedImages};
 use crate::Result;
 use async_trait::async_trait;
 use image::{DynamicImage, ImageFormat};
+use little_exif::metadata::Metadata;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
@@ -45,8 +46,16 @@ impl ImageService for ImageProcessor {
 
         self.resize_and_save(img.clone(), &jpeg_path, ImageFormat::Jpeg)
             .await?;
+        // Strip EXIF to prevent stale orientation tags from confusing viewers
+        if let Err(e) = Metadata::file_clear_metadata(&jpeg_path) {
+            tracing::warn!("Failed to strip EXIF from JPEG: {}", e);
+        }
+
         self.resize_and_save(img, &webp_path, ImageFormat::WebP)
             .await?;
+        if let Err(e) = Metadata::file_clear_metadata(&webp_path) {
+            tracing::warn!("Failed to strip EXIF from WebP: {}", e);
+        }
 
         Ok(ProcessedImages {
             jpeg_path: jpeg_path.to_string_lossy().to_string(),

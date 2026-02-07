@@ -97,7 +97,38 @@ impl Days {
     }
 }
 
-// OpenAI API Request/Response models
+// Provider enum
+#[derive(Debug, Clone, PartialEq)]
+pub enum AiProvider {
+    OpenAi,
+    Gemini,
+}
+
+impl std::fmt::Display for AiProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AiProvider::OpenAi => write!(f, "openai"),
+            AiProvider::Gemini => write!(f, "gemini"),
+        }
+    }
+}
+
+impl std::str::FromStr for AiProvider {
+    type Err = crate::Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "openai" => Ok(AiProvider::OpenAi),
+            "gemini" => Ok(AiProvider::Gemini),
+            other => Err(crate::Error::Config(format!(
+                "Unknown AI provider '{}'. Must be 'openai' or 'gemini'",
+                other
+            ))),
+        }
+    }
+}
+
+// OpenAI-format API request/response models
 #[derive(Debug, Serialize)]
 pub struct ChatCompletionRequest {
     pub model: String,
@@ -150,7 +181,6 @@ pub struct ChatMessage {
     pub content: Option<ChatMessageContent>,
 }
 
-// Text detection response structure
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TextDetectionResponse {
     pub includes_text: bool,
@@ -190,30 +220,90 @@ pub struct ImageData {
 // Configuration
 #[derive(Debug, Clone)]
 pub struct Config {
-    pub openai_api_key: String,
-    pub cdn_access_key_id: String,
-    pub cdn_secret_access_key: String,
+    pub openai_api_key: Option<String>,
+    pub gemini_api_key: Option<String>,
+    pub chat_provider: AiProvider,
+    pub image_provider: AiProvider,
+    pub qa_provider: AiProvider,
+    pub chat_model: String,
+    pub image_model: String,
+    pub qa_model: String,
+    pub cdn_access_key_id: Option<String>,
+    pub cdn_secret_access_key: Option<String>,
     pub cdn_endpoint: String,
     pub cdn_bucket: String,
     pub cdn_base_url: String,
+    pub dry_run: bool,
+}
+
+fn required_env(name: &str) -> crate::Result<String> {
+    std::env::var(name)
+        .map_err(|_| crate::Error::Config(format!("{} environment variable is required", name)))
 }
 
 impl Config {
     pub fn from_env() -> crate::Result<Self> {
         dotenvy::dotenv().ok();
 
+        let chat_provider: AiProvider = required_env("CHAT_PROVIDER")?.parse()?;
+        let image_provider: AiProvider = required_env("IMAGE_PROVIDER")?.parse()?;
+        let qa_provider: AiProvider = required_env("QA_PROVIDER")?.parse()?;
+
+        let chat_model = required_env("CHAT_MODEL")?;
+        let image_model = required_env("IMAGE_MODEL")?;
+        let qa_model = required_env("QA_MODEL")?;
+
+        let dry_run = std::env::var("DRY_RUN")
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false);
+
+        let openai_api_key = std::env::var("OPENAI_API_KEY").ok();
+        let gemini_api_key = std::env::var("GEMINI_API_KEY").ok();
+
+        let needs_openai = chat_provider == AiProvider::OpenAi
+            || image_provider == AiProvider::OpenAi
+            || qa_provider == AiProvider::OpenAi;
+        let needs_gemini = chat_provider == AiProvider::Gemini
+            || image_provider == AiProvider::Gemini
+            || qa_provider == AiProvider::Gemini;
+
+        if needs_openai && openai_api_key.is_none() {
+            return Err(crate::Error::Config(
+                "OPENAI_API_KEY is required when using OpenAI as a provider".to_string(),
+            ));
+        }
+        if needs_gemini && gemini_api_key.is_none() {
+            return Err(crate::Error::Config(
+                "GEMINI_API_KEY is required when using Gemini as a provider".to_string(),
+            ));
+        }
+
+        let cdn_access_key_id = std::env::var("CDN_ACCESS_KEY_ID").ok();
+        let cdn_secret_access_key = std::env::var("CDN_SECRET_ACCESS_KEY").ok();
+
+        if !dry_run && (cdn_access_key_id.is_none() || cdn_secret_access_key.is_none()) {
+            return Err(crate::Error::Config(
+                "CDN_ACCESS_KEY_ID and CDN_SECRET_ACCESS_KEY are required when DRY_RUN is not enabled".to_string(),
+            ));
+        }
+
         Ok(Self {
-            openai_api_key: std::env::var("AI_API_KEY")
-                .map_err(|_| crate::Error::Generic("AI_API_KEY not set".to_string()))?,
-            cdn_access_key_id: std::env::var("CDN_ACCESS_KEY_ID")
-                .map_err(|_| crate::Error::Generic("CDN_ACCESS_KEY_ID not set".to_string()))?,
-            cdn_secret_access_key: std::env::var("CDN_SECRET_ACCESS_KEY")
-                .map_err(|_| crate::Error::Generic("CDN_SECRET_ACCESS_KEY not set".to_string()))?,
+            openai_api_key,
+            gemini_api_key,
+            chat_provider,
+            image_provider,
+            qa_provider,
+            chat_model,
+            image_model,
+            qa_model,
+            cdn_access_key_id,
+            cdn_secret_access_key,
             cdn_endpoint: std::env::var("CDN_ENDPOINT")
                 .unwrap_or_else(|_| "https://nyc3.digitaloceanspaces.com".to_string()),
             cdn_bucket: std::env::var("CDN_BUCKET").unwrap_or_else(|_| "iamdreamingof".to_string()),
             cdn_base_url: std::env::var("CDN_BASE_URL")
                 .unwrap_or_else(|_| "https://cdn.iamdreamingof.com".to_string()),
+            dry_run,
         })
     }
 }
@@ -246,5 +336,27 @@ mod tests {
         assert_eq!(days.max_id(), Some(2));
         assert!(days.find_by_date("2024-01-01").is_some());
         assert!(days.find_by_date("2024-01-03").is_none());
+    }
+
+    #[test]
+    fn test_ai_provider_from_str() {
+        assert_eq!("openai".parse::<AiProvider>().unwrap(), AiProvider::OpenAi);
+        assert_eq!("gemini".parse::<AiProvider>().unwrap(), AiProvider::Gemini);
+        assert_eq!("OpenAI".parse::<AiProvider>().unwrap(), AiProvider::OpenAi);
+        assert_eq!("GEMINI".parse::<AiProvider>().unwrap(), AiProvider::Gemini);
+    }
+
+    #[test]
+    fn test_ai_provider_from_str_unknown() {
+        let err = "opneai".parse::<AiProvider>().unwrap_err();
+        assert!(matches!(err, crate::Error::Config(_)));
+    }
+
+    #[test]
+    fn test_ai_provider_display_roundtrip() {
+        let openai = AiProvider::OpenAi;
+        let gemini = AiProvider::Gemini;
+        assert_eq!(openai.to_string().parse::<AiProvider>().unwrap(), openai);
+        assert_eq!(gemini.to_string().parse::<AiProvider>().unwrap(), gemini);
     }
 }
