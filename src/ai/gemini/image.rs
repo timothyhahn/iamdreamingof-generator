@@ -1,31 +1,22 @@
 use super::client::GeminiHttpClient;
-use crate::ai::ImageGenerationService;
+use super::types::{Content, GenerateContentResponse, Part};
+use crate::ai::{words_to_csv, ImageGenerationService};
 use crate::models::Word;
 use crate::{prompts, Error, Result};
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::time::Duration;
 
 #[derive(Debug, Serialize)]
-struct GenerateContentRequest {
+struct ImageRequest {
     contents: Vec<Content>,
     #[serde(rename = "generationConfig")]
-    generation_config: GenerationConfig,
-}
-
-#[derive(Debug, Serialize)]
-struct Content {
-    parts: Vec<TextPart>,
-}
-
-#[derive(Debug, Serialize)]
-struct TextPart {
-    text: String,
+    generation_config: ImageGenerationConfig,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct GenerationConfig {
+struct ImageGenerationConfig {
     response_modalities: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     image_config: Option<ImageConfig>,
@@ -37,75 +28,48 @@ struct ImageConfig {
     aspect_ratio: String,
 }
 
-#[derive(Debug, Deserialize)]
-struct GenerateContentResponse {
-    candidates: Vec<Candidate>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Candidate {
-    content: ResponseContent,
-}
-
-#[derive(Debug, Deserialize)]
-struct ResponseContent {
-    parts: Vec<ResponsePart>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum ResponsePart {
-    InlineData {
-        #[serde(rename = "inlineData")]
-        inline_data: InlineData,
-    },
-    #[allow(dead_code)]
-    Text { text: String },
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct InlineData {
-    mime_type: String,
-    data: String,
-}
-
 pub struct GeminiImageClient {
     http: GeminiHttpClient,
 }
 
 impl GeminiImageClient {
     pub fn new(api_key: String, model: String) -> Self {
-        Self {
-            http: GeminiHttpClient::new(api_key, model, Duration::from_secs(120)),
-        }
+        Self::new_with_client(api_key, model, reqwest::Client::new())
     }
 
-    #[cfg(test)]
-    fn with_base_url(mut self, base_url: String) -> Self {
-        self.http = self.http.with_base_url(base_url);
-        self
+    pub fn new_with_client(api_key: String, model: String, client: reqwest::Client) -> Self {
+        Self {
+            http: GeminiHttpClient::new_with_client(
+                api_key,
+                model,
+                Duration::from_secs(120),
+                client,
+            ),
+        }
     }
 }
+
+#[cfg(test)]
+super::impl_with_gemini_base_url!(GeminiImageClient);
 
 #[async_trait]
 impl ImageGenerationService for GeminiImageClient {
     async fn generate_image(&self, prompt: &str, words: &[Word]) -> Result<Vec<u8>> {
-        let word_list: Vec<String> = words.iter().map(|w| w.word.clone()).collect();
-        let words_str = word_list.join(", ");
+        let words_str = words_to_csv(words);
 
         let enhanced_prompt = prompts::render(
             prompts::IMAGE_ENHANCEMENT,
             &[("prompt", prompt), ("words", &words_str)],
         );
 
-        let request = GenerateContentRequest {
+        let request = ImageRequest {
             contents: vec![Content {
-                parts: vec![TextPart {
+                role: None,
+                parts: vec![Part::Text {
                     text: enhanced_prompt,
                 }],
             }],
-            generation_config: GenerationConfig {
+            generation_config: ImageGenerationConfig {
                 response_modalities: vec!["IMAGE".to_string()],
                 image_config: Some(ImageConfig {
                     aspect_ratio: "1:1".to_string(),
@@ -120,7 +84,7 @@ impl ImageGenerationService for GeminiImageClient {
             .first()
             .and_then(|c| {
                 c.content.parts.iter().find_map(|p| match p {
-                    ResponsePart::InlineData { inline_data } => Some(inline_data),
+                    Part::InlineData { inline_data } => Some(inline_data),
                     _ => None,
                 })
             })
@@ -134,15 +98,21 @@ impl ImageGenerationService for GeminiImageClient {
         use base64::Engine as _;
         base64::engine::general_purpose::STANDARD
             .decode(&image_data.data)
-            .map_err(|e| Error::Generic(format!("Failed to decode Gemini base64 image: {}", e)))
+            .map_err(|e| Error::AiProvider(format!("Failed to decode Gemini base64 image: {}", e)))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::{method, path_regex};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use crate::ai::gemini::test_support;
+    use wiremock::{MockServer, ResponseTemplate};
+
+    const DEFAULT_MODEL: &str = "gemini-2.5-flash-image";
+
+    fn make_client(server: &MockServer, api_key: &str, model: &str) -> GeminiImageClient {
+        GeminiImageClient::new(api_key.to_string(), model.to_string()).with_base_url(server.uri())
+    }
 
     #[tokio::test]
     async fn test_generate_image_parses_inline_data() {
@@ -152,8 +122,7 @@ mod tests {
         let fake_image = vec![0x89, 0x50, 0x4E, 0x47];
         let b64 = base64::engine::general_purpose::STANDARD.encode(&fake_image);
 
-        Mock::given(method("POST"))
-            .and(path_regex(r"/v1beta/models/.+:generateContent"))
+        test_support::post_path_regex(test_support::GENERATE_CONTENT_PATH_REGEX)
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "candidates": [{
                     "content": {
@@ -169,9 +138,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client =
-            GeminiImageClient::new("key".to_string(), "gemini-2.5-flash-image".to_string())
-                .with_base_url(server.uri());
+        let client = make_client(&server, "key", DEFAULT_MODEL);
 
         let result = client.generate_image("a dream", &[]).await.unwrap();
         assert_eq!(result, fake_image);
@@ -181,15 +148,12 @@ mod tests {
     async fn test_api_error_returns_ai_provider_error() {
         let server = MockServer::start().await;
 
-        Mock::given(method("POST"))
-            .and(path_regex(r"/v1beta/models/.+:generateContent"))
+        test_support::post_path_regex(test_support::GENERATE_CONTENT_PATH_REGEX)
             .respond_with(ResponseTemplate::new(429).set_body_string("quota exceeded"))
             .mount(&server)
             .await;
 
-        let client =
-            GeminiImageClient::new("key".to_string(), "gemini-2.5-flash-image".to_string())
-                .with_base_url(server.uri());
+        let client = make_client(&server, "key", DEFAULT_MODEL);
 
         let err = client.generate_image("a dream", &[]).await.unwrap_err();
         assert!(matches!(err, Error::AiProvider(_)));
@@ -202,8 +166,7 @@ mod tests {
         use base64::Engine as _;
         let b64 = base64::engine::general_purpose::STANDARD.encode([0x00]);
 
-        Mock::given(method("POST"))
-            .and(path_regex(r"/v1beta/models/.+:generateContent"))
+        test_support::post_path_regex(test_support::GENERATE_CONTENT_PATH_REGEX)
             .and(wiremock::matchers::body_string_contains(
                 "\"aspectRatio\":\"1:1\"",
             ))
@@ -220,10 +183,51 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client =
-            GeminiImageClient::new("key".to_string(), "gemini-2.5-flash-image".to_string())
-                .with_base_url(server.uri());
+        let client = make_client(&server, "key", DEFAULT_MODEL);
 
         client.generate_image("test", &[]).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_generate_image_rejects_missing_inline_data() {
+        let server = MockServer::start().await;
+
+        test_support::post_path_regex(test_support::GENERATE_CONTENT_PATH_REGEX)
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "candidates": [{
+                    "content": { "parts": [{ "text": "no image here" }] }
+                }]
+            })))
+            .mount(&server)
+            .await;
+
+        let client = make_client(&server, "key", DEFAULT_MODEL);
+        let err = client.generate_image("a dream", &[]).await.unwrap_err();
+        assert!(matches!(err, Error::AiProvider(_)));
+    }
+
+    #[tokio::test]
+    async fn test_generate_image_rejects_invalid_base64() {
+        let server = MockServer::start().await;
+
+        test_support::post_path_regex(test_support::GENERATE_CONTENT_PATH_REGEX)
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "candidates": [{
+                    "content": {
+                        "parts": [{
+                            "inlineData": {
+                                "mimeType": "image/png",
+                                "data": "!!!invalid-base64!!!"
+                            }
+                        }]
+                    }
+                }]
+            })))
+            .mount(&server)
+            .await;
+
+        let client = make_client(&server, "key", DEFAULT_MODEL);
+        let err = client.generate_image("a dream", &[]).await.unwrap_err();
+        assert!(matches!(err, Error::AiProvider(_)));
     }
 }

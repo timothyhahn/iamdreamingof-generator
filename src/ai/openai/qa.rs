@@ -1,9 +1,10 @@
 use super::client::OpenAiHttpClient;
-use crate::ai::ImageQaService;
-use crate::models::{
+use super::types::{
     ChatCompletionRequest, ChatMessage, ChatMessageContent, ImageUrl, JsonSchema, MessagePart,
-    ResponseFormat, TextDetectionResponse,
+    ResponseFormat,
 };
+use crate::ai::ImageQaService;
+use crate::models::TextDetectionResponse;
 use crate::{prompts, Error, Result};
 use async_trait::async_trait;
 use std::time::Duration;
@@ -15,18 +16,19 @@ pub struct OpenAiImageQaClient {
 
 impl OpenAiImageQaClient {
     pub fn new(api_key: String, model: String) -> Self {
+        Self::new_with_client(api_key, model, reqwest::Client::new())
+    }
+
+    pub fn new_with_client(api_key: String, model: String, client: reqwest::Client) -> Self {
         Self {
-            http: OpenAiHttpClient::new(api_key, Duration::from_secs(30)),
+            http: OpenAiHttpClient::new_with_client(api_key, Duration::from_secs(30), client),
             model,
         }
     }
-
-    #[cfg(test)]
-    fn with_base_url(mut self, base_url: String) -> Self {
-        self.http = self.http.with_base_url(base_url);
-        self
-    }
 }
+
+#[cfg(test)]
+super::impl_with_openai_base_url!(OpenAiImageQaClient);
 
 #[async_trait]
 impl ImageQaService for OpenAiImageQaClient {
@@ -87,7 +89,7 @@ impl ImageQaService for OpenAiImageQaClient {
             response_format: Some(response_format),
         };
 
-        let response = self.http.chat_completion(request).await?;
+        let response = self.http.chat_completion(&request).await?;
 
         let json_str = response
             .choices
@@ -115,15 +117,20 @@ impl ImageQaService for OpenAiImageQaClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::{method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use crate::ai::openai::test_support;
+    use wiremock::{MockServer, ResponseTemplate};
+
+    const DEFAULT_MODEL: &str = "gpt-4o-mini";
+
+    fn make_client(server: &MockServer, api_key: &str, model: &str) -> OpenAiImageQaClient {
+        OpenAiImageQaClient::new(api_key.to_string(), model.to_string()).with_base_url(server.uri())
+    }
 
     #[tokio::test]
     async fn test_detect_text_returns_false_when_no_text() {
         let server = MockServer::start().await;
 
-        Mock::given(method("POST"))
-            .and(path("/v1/chat/completions"))
+        test_support::post(test_support::CHAT_COMPLETIONS_PATH)
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "choices": [{
                     "message": {
@@ -136,8 +143,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = OpenAiImageQaClient::new("test-key".to_string(), "gpt-4o-mini".to_string())
-            .with_base_url(server.uri());
+        let client = make_client(&server, "test-key", DEFAULT_MODEL);
 
         let has_text = client.detect_text(&[0x89, 0x50]).await.unwrap();
         assert!(!has_text);
@@ -147,8 +153,7 @@ mod tests {
     async fn test_detect_text_returns_true_when_text_found() {
         let server = MockServer::start().await;
 
-        Mock::given(method("POST"))
-            .and(path("/v1/chat/completions"))
+        test_support::post(test_support::CHAT_COMPLETIONS_PATH)
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "choices": [{
                     "message": {
@@ -161,10 +166,61 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = OpenAiImageQaClient::new("test-key".to_string(), "gpt-4o-mini".to_string())
-            .with_base_url(server.uri());
+        let client = make_client(&server, "test-key", DEFAULT_MODEL);
 
         let has_text = client.detect_text(&[0x89, 0x50]).await.unwrap();
         assert!(has_text);
+    }
+
+    #[tokio::test]
+    async fn test_detect_text_api_error_returns_ai_provider_error() {
+        let server = MockServer::start().await;
+
+        test_support::post(test_support::CHAT_COMPLETIONS_PATH)
+            .respond_with(ResponseTemplate::new(500).set_body_string("internal error"))
+            .mount(&server)
+            .await;
+
+        let client = make_client(&server, "test-key", DEFAULT_MODEL);
+        let err = client.detect_text(&[0x89, 0x50]).await.unwrap_err();
+        assert!(matches!(err, Error::AiProvider(_)));
+    }
+
+    #[tokio::test]
+    async fn test_detect_text_rejects_empty_choices() {
+        let server = MockServer::start().await;
+
+        test_support::post(test_support::CHAT_COMPLETIONS_PATH)
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": []
+            })))
+            .mount(&server)
+            .await;
+
+        let client = make_client(&server, "test-key", DEFAULT_MODEL);
+        let err = client.detect_text(&[0x89, 0x50]).await.unwrap_err();
+        assert!(matches!(err, Error::AiProvider(_)));
+    }
+
+    #[tokio::test]
+    async fn test_detect_text_rejects_invalid_json_payload() {
+        let server = MockServer::start().await;
+
+        test_support::post(test_support::CHAT_COMPLETIONS_PATH)
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": "{\"includes_text\":\"maybe\"}"
+                    },
+                    "finish_reason": "stop"
+                }]
+            })))
+            .mount(&server)
+            .await;
+
+        let client = make_client(&server, "test-key", DEFAULT_MODEL);
+        let err = client.detect_text(&[0x89, 0x50]).await.unwrap_err();
+        assert!(matches!(err, Error::AiProvider(_)));
     }
 }

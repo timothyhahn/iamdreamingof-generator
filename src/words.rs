@@ -14,26 +14,30 @@ use std::path::Path;
 #[derive(Debug, Deserialize)]
 struct WordList(Vec<String>);
 
+/// Random word selector that enforces per-day uniqueness across all difficulties.
 pub struct WordSelector {
     objects: Vec<String>,
     gerunds: Vec<String>,
     concepts: Vec<String>,
 }
 
+/// Read a single JSON word-list file into `Vec<String>`.
+pub fn load_word_list(path: &Path) -> Result<Vec<String>> {
+    let list: WordList = serde_json::from_str(&fs::read_to_string(path)?)?;
+    Ok(list.0)
+}
+
 impl WordSelector {
+    /// Load object/gerund/concept word lists from `data_dir`.
     pub fn from_files(data_dir: &Path) -> Result<Self> {
         let objects_path = data_dir.join("objects.json");
         let gerunds_path = data_dir.join("gerunds.json");
         let concepts_path = data_dir.join("concepts.json");
 
-        let objects: WordList = serde_json::from_str(&fs::read_to_string(objects_path)?)?;
-        let gerunds: WordList = serde_json::from_str(&fs::read_to_string(gerunds_path)?)?;
-        let concepts: WordList = serde_json::from_str(&fs::read_to_string(concepts_path)?)?;
-
         Ok(Self {
-            objects: objects.0,
-            gerunds: gerunds.0,
-            concepts: concepts.0,
+            objects: load_word_list(&objects_path)?,
+            gerunds: load_word_list(&gerunds_path)?,
+            concepts: load_word_list(&concepts_path)?,
         })
     }
 
@@ -47,6 +51,7 @@ impl WordSelector {
         }
     }
 
+    /// Select one complete set of easy/medium/hard/dreaming words.
     pub fn select_words(&self) -> Result<WordSets> {
         const MAX_ATTEMPTS: usize = 100;
 
@@ -116,16 +121,16 @@ impl WordSelector {
         Ok(selected
             .map(|word| Word {
                 word: word.clone(),
-                word_type: word_type.clone(),
+                word_type,
             })
             .collect())
     }
 
     fn all_words_unique(&self, sets: &WordSets) -> bool {
-        let mut seen = HashSet::new();
+        let mut seen: HashSet<String> = HashSet::new();
 
         for word in sets.all_words() {
-            if !seen.insert(&word.word) {
+            if !seen.insert(word.word.to_lowercase()) {
                 return false;
             }
         }
@@ -134,6 +139,7 @@ impl WordSelector {
     }
 }
 
+/// Per-difficulty selected words for a single generated day.
 pub struct WordSets {
     pub easy: Vec<Word>,
     pub medium: Vec<Word>,
@@ -154,11 +160,40 @@ impl WordSets {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
+
+    fn strings(words: &[&str]) -> Vec<String> {
+        words.iter().map(|word| (*word).to_string()).collect()
+    }
 
     fn create_test_selector() -> WordSelector {
-        // Load actual word files for testing to ensure enough unique words
-        WordSelector::from_files(Path::new("data")).expect("Failed to load word files for testing")
+        WordSelector::new(
+            strings(&[
+                "apple", "anchor", "bridge", "clock", "drum", "feather", "guitar", "helmet",
+                "island", "jacket", "kettle", "lantern", "mirror", "notebook",
+            ]),
+            strings(&[
+                "baking",
+                "climbing",
+                "dancing",
+                "exploring",
+                "floating",
+                "growing",
+                "hiking",
+                "imagining",
+                "juggling",
+                "knitting",
+                "listening",
+                "meditating",
+            ]),
+            strings(&[
+                "clarity",
+                "freedom",
+                "harmony",
+                "memory",
+                "wonder",
+                "resilience",
+            ]),
+        )
     }
 
     #[test]
@@ -242,5 +277,24 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_all_words_unique_is_case_insensitive() {
+        let selector = create_test_selector();
+        let sets = WordSets {
+            easy: vec![Word {
+                word: "Apple".to_string(),
+                word_type: WordType::Object,
+            }],
+            medium: vec![Word {
+                word: "apple".to_string(),
+                word_type: WordType::Object,
+            }],
+            hard: vec![],
+            dreaming: vec![],
+        };
+
+        assert!(!selector.all_words_unique(&sets));
     }
 }

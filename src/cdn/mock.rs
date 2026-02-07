@@ -43,6 +43,10 @@ impl MockCdnClient {
     pub fn get_files(&self) -> HashMap<String, Vec<u8>> {
         self.files.lock().unwrap().clone()
     }
+
+    pub async fn file_exists(&self, key: &str) -> Result<bool> {
+        Ok(self.files.lock().unwrap().contains_key(key))
+    }
 }
 
 impl Default for MockCdnClient {
@@ -74,10 +78,6 @@ impl CdnService for MockCdnClient {
                 .map_err(|e| crate::Error::S3(format!("Invalid UTF-8: {}", e))),
             None => Err(crate::Error::S3(format!("File not found: {}", key))),
         }
-    }
-
-    async fn file_exists(&self, key: &str) -> Result<bool> {
-        Ok(self.files.lock().unwrap().contains_key(key))
     }
 }
 

@@ -1,6 +1,7 @@
 use super::client::OpenAiHttpClient;
-use crate::ai::ChatService;
-use crate::models::{ChatCompletionRequest, ChatMessage, ChatMessageContent, Word};
+use super::types::{ChatCompletionRequest, ChatMessage, ChatMessageContent};
+use crate::ai::{words_to_csv, ChatService};
+use crate::models::Word;
 use crate::{prompts, Error, Result};
 use async_trait::async_trait;
 use std::time::Duration;
@@ -12,24 +13,24 @@ pub struct OpenAiChatClient {
 
 impl OpenAiChatClient {
     pub fn new(api_key: String, model: String) -> Self {
+        Self::new_with_client(api_key, model, reqwest::Client::new())
+    }
+
+    pub fn new_with_client(api_key: String, model: String, client: reqwest::Client) -> Self {
         Self {
-            http: OpenAiHttpClient::new(api_key, Duration::from_secs(30)),
+            http: OpenAiHttpClient::new_with_client(api_key, Duration::from_secs(30), client),
             model,
         }
     }
-
-    #[cfg(test)]
-    fn with_base_url(mut self, base_url: String) -> Self {
-        self.http = self.http.with_base_url(base_url);
-        self
-    }
 }
+
+#[cfg(test)]
+super::impl_with_openai_base_url!(OpenAiChatClient);
 
 #[async_trait]
 impl ChatService for OpenAiChatClient {
     async fn generate_prompt(&self, words: &[Word]) -> Result<String> {
-        let word_list: Vec<String> = words.iter().map(|w| w.word.clone()).collect();
-        let words_str = word_list.join(", ");
+        let words_str = words_to_csv(words);
 
         let system_message = ChatMessage {
             role: "system".to_string(),
@@ -51,7 +52,7 @@ impl ChatService for OpenAiChatClient {
             response_format: None,
         };
 
-        let response = self.http.chat_completion(request).await?;
+        let response = self.http.chat_completion(&request).await?;
 
         response
             .choices
@@ -67,16 +68,22 @@ impl ChatService for OpenAiChatClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai::openai::test_support;
     use crate::models::WordType;
-    use wiremock::matchers::{header, method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use wiremock::matchers::header;
+    use wiremock::{MockServer, ResponseTemplate};
+
+    const DEFAULT_MODEL: &str = "gpt-5";
+
+    fn make_client(server: &MockServer, api_key: &str, model: &str) -> OpenAiChatClient {
+        OpenAiChatClient::new(api_key.to_string(), model.to_string()).with_base_url(server.uri())
+    }
 
     #[tokio::test]
     async fn test_generate_prompt_parses_response() {
         let server = MockServer::start().await;
 
-        Mock::given(method("POST"))
-            .and(path("/v1/chat/completions"))
+        test_support::post(test_support::CHAT_COMPLETIONS_PATH)
             .and(header("Authorization", "Bearer test-key"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "choices": [{
@@ -90,8 +97,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = OpenAiChatClient::new("test-key".to_string(), "gpt-5".to_string())
-            .with_base_url(server.uri());
+        let client = make_client(&server, "test-key", DEFAULT_MODEL);
 
         let words = vec![
             Word {
@@ -112,8 +118,7 @@ mod tests {
     async fn test_generate_prompt_sends_configured_model() {
         let server = MockServer::start().await;
 
-        Mock::given(method("POST"))
-            .and(path("/v1/chat/completions"))
+        test_support::post(test_support::CHAT_COMPLETIONS_PATH)
             .and(wiremock::matchers::body_string_contains(
                 "\"model\":\"custom-model\"",
             ))
@@ -127,8 +132,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = OpenAiChatClient::new("key".to_string(), "custom-model".to_string())
-            .with_base_url(server.uri());
+        let client = make_client(&server, "key", "custom-model");
 
         client.generate_prompt(&[]).await.unwrap();
     }
@@ -137,15 +141,29 @@ mod tests {
     async fn test_api_error_returns_ai_provider_error() {
         let server = MockServer::start().await;
 
-        Mock::given(method("POST"))
-            .and(path("/v1/chat/completions"))
+        test_support::post(test_support::CHAT_COMPLETIONS_PATH)
             .respond_with(ResponseTemplate::new(429).set_body_string("rate limited"))
             .mount(&server)
             .await;
 
-        let client = OpenAiChatClient::new("key".to_string(), "gpt-5".to_string())
-            .with_base_url(server.uri());
+        let client = make_client(&server, "key", DEFAULT_MODEL);
 
+        let err = client.generate_prompt(&[]).await.unwrap_err();
+        assert!(matches!(err, Error::AiProvider(_)));
+    }
+
+    #[tokio::test]
+    async fn test_generate_prompt_rejects_empty_choices() {
+        let server = MockServer::start().await;
+
+        test_support::post(test_support::CHAT_COMPLETIONS_PATH)
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": []
+            })))
+            .mount(&server)
+            .await;
+
+        let client = make_client(&server, "key", DEFAULT_MODEL);
         let err = client.generate_prompt(&[]).await.unwrap_err();
         assert!(matches!(err, Error::AiProvider(_)));
     }

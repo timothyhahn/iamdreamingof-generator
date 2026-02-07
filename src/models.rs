@@ -1,11 +1,12 @@
 //! Data models and structures
 //!
-//! Defines the core data structures for challenges, words, and API
-//! interactions with OpenAI and CDN services.
+//! Defines the core data structures for challenges, words, and app
+//! configuration.
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// Word category used for challenge balancing and prompt constraints.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum WordType {
     Object,
@@ -13,6 +14,7 @@ pub enum WordType {
     Concept,
 }
 
+/// A single selected word and its category label.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Word {
     pub word: String,
@@ -20,6 +22,7 @@ pub struct Word {
     pub word_type: WordType,
 }
 
+/// A generated challenge payload published to the frontend.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Challenge {
     pub words: Vec<Word>,
@@ -30,6 +33,7 @@ pub struct Challenge {
 }
 
 impl Challenge {
+    /// Build a challenge object from generated assets and selected words.
     pub fn new(
         words: Vec<Word>,
         image_path: String,
@@ -47,6 +51,7 @@ impl Challenge {
     }
 }
 
+/// Challenge set for all supported difficulties on a day.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Challenges {
     pub easy: Challenge,
@@ -55,19 +60,22 @@ pub struct Challenges {
     pub dreaming: Challenge,
 }
 
+/// Daily record containing the generated challenge set and stable numeric id.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Day {
     pub date: String, // Format: YYYY-MM-DD
-    pub id: i32,
+    pub id: u32,
     pub challenges: Challenges,
 }
 
+/// Index entry linking a date string to its numeric day id.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DateEntry {
     pub date: String,
-    pub id: i32,
+    pub id: u32,
 }
 
+/// `days.json` index structure used to map dates to generated payload ids.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Days {
     pub days: Vec<DateEntry>,
@@ -80,25 +88,29 @@ impl Default for Days {
 }
 
 impl Days {
+    /// Create an empty days index.
     pub fn new() -> Self {
         Self { days: Vec::new() }
     }
 
-    pub fn add_day(&mut self, date: String, id: i32) {
+    /// Append a date/id mapping to the index.
+    pub fn add_day(&mut self, date: String, id: u32) {
         self.days.push(DateEntry { date, id });
     }
 
+    /// Find an existing day entry by date.
     pub fn find_by_date(&self, date: &str) -> Option<&DateEntry> {
         self.days.iter().find(|d| d.date == date)
     }
 
-    pub fn max_id(&self) -> Option<i32> {
+    /// Return the current maximum assigned day id, if any.
+    pub fn max_id(&self) -> Option<u32> {
         self.days.iter().map(|d| d.id).max()
     }
 }
 
-// Provider enum
-#[derive(Debug, Clone, PartialEq)]
+/// Supported AI providers for chat/image/QA/embedding operations.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AiProvider {
     OpenAi,
     Gemini,
@@ -128,96 +140,13 @@ impl std::str::FromStr for AiProvider {
     }
 }
 
-// OpenAI-format API request/response models
-#[derive(Debug, Serialize)]
-pub struct ChatCompletionRequest {
-    pub model: String,
-    pub messages: Vec<ChatMessage>,
-    pub max_completion_tokens: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub response_format: Option<ResponseFormat>,
-}
-
-#[derive(Debug, Serialize, Clone)]
-pub struct ResponseFormat {
-    #[serde(rename = "type")]
-    pub format_type: String, // "json_schema" for structured output
-    pub json_schema: JsonSchema,
-}
-
-#[derive(Debug, Serialize, Clone)]
-pub struct JsonSchema {
-    pub name: String,
-    pub schema: serde_json::Value,
-    pub strict: bool,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum ChatMessageContent {
-    Text(String),
-    ImageContent(Vec<MessagePart>),
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct MessagePart {
-    #[serde(rename = "type")]
-    pub part_type: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub text: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub image_url: Option<ImageUrl>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ImageUrl {
-    pub url: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ChatMessage {
-    pub role: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub content: Option<ChatMessageContent>,
-}
-
+/// Structured response returned by vision QA prompts.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TextDetectionResponse {
     pub includes_text: bool,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct ChatCompletionResponse {
-    pub choices: Vec<ChatChoice>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ChatChoice {
-    pub message: ChatMessage,
-    pub finish_reason: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ImageGenerationRequest {
-    pub model: String,
-    pub prompt: String,
-    pub n: u32,
-    pub size: String,
-    pub quality: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ImageGenerationResponse {
-    pub data: Vec<ImageData>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ImageData {
-    pub url: Option<String>,
-    pub b64_json: Option<String>,
-}
-
-// Configuration
+/// Runtime configuration resolved from environment variables.
 #[derive(Debug, Clone)]
 pub struct Config {
     pub openai_api_key: Option<String>,
@@ -242,6 +171,7 @@ fn required_env(name: &str) -> crate::Result<String> {
 }
 
 impl Config {
+    /// Load configuration from environment variables and validate provider key requirements.
     pub fn from_env() -> crate::Result<Self> {
         dotenvy::dotenv().ok();
 

@@ -10,16 +10,19 @@ Modular architecture with dependency injection and multi-provider AI support:
 src/
 ├── main.rs           # Entry point and orchestration
 ├── lib.rs            # Library root
+├── semantic.rs       # Cosine similarity + pair scoring utilities
 ├── models.rs         # Data structures (Day, Challenge, Config, AiProvider)
 ├── prompts.rs        # Shared prompt templates (include_str! from data/prompts/)
 ├── words.rs          # Word selection logic
 ├── error.rs          # Error types
+├── bin/
+│   └── word_similarity_audit.rs # Embedding-based near-duplicate word audit
 ├── ai/
-│   ├── mod.rs        # Trait definitions (ChatService, ImageGenerationService, ImageQaService)
+│   ├── mod.rs        # Trait definitions (chat, image, QA, embeddings)
 │   ├── mime.rs       # Image MIME type detection from magic bytes
 │   ├── mock.rs       # Mock implementations for testing
-│   ├── openai/       # OpenAI provider (chat, image, qa, shared HTTP client)
-│   └── gemini/       # Gemini provider (chat, image, qa, shared HTTP client)
+│   ├── openai/       # OpenAI provider (chat, image, qa, embeddings)
+│   └── gemini/       # Gemini provider (chat, image, qa, embeddings)
 ├── cdn/              # S3/CDN integration
 └── image/            # Image processing (resize, JPEG + WebP)
 
@@ -53,6 +56,31 @@ cargo run
 # Run for specific date
 cargo run -- 2024-01-15
 ```
+
+### Word Similarity Audit
+
+Use embeddings to flag semantically close words both within categories and
+across category pairs:
+
+```bash
+# Gemini embeddings (default provider/model)
+GEMINI_API_KEY=... cargo run --bin word_similarity_audit -- --threshold 0.75
+
+# Gemini embeddings
+GEMINI_API_KEY=... cargo run --bin word_similarity_audit -- --provider gemini
+
+# Write machine-readable report
+GEMINI_API_KEY=... cargo run --bin word_similarity_audit -- \
+  --json-output output/word_similarity_report.json
+```
+
+Useful flags:
+- `--provider openai|gemini`
+- `--model <embedding-model-name>`
+- `--threshold <0.0..1.0>`
+- `--batch-size <n>`
+- `--max-pairs <n>`
+- `--data-dir <path>`
 
 ### Testing
 

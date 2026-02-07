@@ -1,4 +1,4 @@
-use crate::models::{ChatCompletionRequest, ChatCompletionResponse};
+use super::types::{ChatCompletionRequest, ChatCompletionResponse};
 use crate::{Error, Result};
 use reqwest::Client;
 use serde::de::DeserializeOwned;
@@ -7,23 +7,25 @@ use std::time::Duration;
 
 const DEFAULT_BASE_URL: &str = "https://api.openai.com";
 
+/// Lightweight OpenAI REST client used by chat/image/embedding modules.
 pub struct OpenAiHttpClient {
     pub(crate) client: Client,
     pub(crate) api_key: String,
     pub(crate) base_url: String,
+    timeout: Duration,
 }
 
 impl OpenAiHttpClient {
     pub fn new(api_key: String, timeout: Duration) -> Self {
-        let client = Client::builder()
-            .timeout(timeout)
-            .build()
-            .expect("Failed to build HTTP client");
+        Self::new_with_client(api_key, timeout, Client::new())
+    }
 
+    pub fn new_with_client(api_key: String, timeout: Duration, client: Client) -> Self {
         Self {
             client,
             api_key,
             base_url: DEFAULT_BASE_URL.to_string(),
+            timeout,
         }
     }
 
@@ -33,6 +35,11 @@ impl OpenAiHttpClient {
         self
     }
 
+    pub(crate) fn timeout(&self) -> Duration {
+        self.timeout
+    }
+
+    /// Issue a POST request against the OpenAI REST API and deserialize JSON.
     pub async fn post<Req: Serialize, Resp: DeserializeOwned>(
         &self,
         path: &str,
@@ -42,6 +49,7 @@ impl OpenAiHttpClient {
         let response = self
             .client
             .post(&url)
+            .timeout(self.timeout)
             .header("Authorization", format!("Bearer {}", self.api_key))
             .json(request)
             .send()
@@ -68,10 +76,27 @@ impl OpenAiHttpClient {
         })
     }
 
+    /// Convenience wrapper for `/v1/chat/completions`.
     pub async fn chat_completion(
         &self,
-        request: ChatCompletionRequest,
+        request: &ChatCompletionRequest,
     ) -> Result<ChatCompletionResponse> {
-        self.post("/v1/chat/completions", &request).await
+        self.post("/v1/chat/completions", request).await
+    }
+
+    /// Convenience wrapper for `/v1/embeddings`.
+    pub async fn embeddings<Req: Serialize, Resp: DeserializeOwned>(
+        &self,
+        request: &Req,
+    ) -> Result<Resp> {
+        self.post("/v1/embeddings", request).await
+    }
+
+    /// Convenience wrapper for `/v1/images/generations`.
+    pub async fn image_generation<Req: Serialize, Resp: DeserializeOwned>(
+        &self,
+        request: &Req,
+    ) -> Result<Resp> {
+        self.post("/v1/images/generations", request).await
     }
 }

@@ -39,8 +39,11 @@ pub enum Error {
     #[error("Configuration error: {0}")]
     Config(String),
 
-    #[error("Generic error: {0}")]
-    Generic(String),
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
+
+    #[error("Invariant violation: {0}")]
+    Invariant(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

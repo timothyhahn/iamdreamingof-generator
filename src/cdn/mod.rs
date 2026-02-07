@@ -14,7 +14,8 @@ use async_trait::async_trait;
 
 #[async_trait]
 pub trait CdnService: Send + Sync {
+    /// Upload bytes to `key` and return the publicly addressable URL.
     async fn upload_file(&self, key: &str, data: &[u8], content_type: &str) -> Result<String>;
+    /// Read a UTF-8 JSON document from `key`.
     async fn read_json(&self, key: &str) -> Result<String>;
-    async fn file_exists(&self, key: &str) -> Result<bool>;
 }

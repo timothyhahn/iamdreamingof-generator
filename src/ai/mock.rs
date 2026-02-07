@@ -1,149 +1,184 @@
-use super::{ChatService, ImageGenerationService, ImageQaService};
+use super::{ChatService, EmbeddingService, ImageGenerationService, ImageQaService};
 use crate::models::Word;
 use crate::Result;
 use async_trait::async_trait;
 use std::sync::{Arc, Mutex};
 
+#[derive(Default)]
+struct MockState<T> {
+    responses: Vec<T>,
+    call_count: usize,
+}
+
+#[derive(Clone, Default)]
+struct MockResponses<T> {
+    state: Arc<Mutex<MockState<T>>>,
+}
+
+impl<T: Clone> MockResponses<T> {
+    fn with_response(self, response: T) -> Self {
+        self.state.lock().unwrap().responses.push(response);
+        self
+    }
+
+    fn next(&self) -> Option<T> {
+        let mut state = self.state.lock().unwrap();
+        state.call_count += 1;
+        if state.responses.is_empty() {
+            None
+        } else {
+            let index = (state.call_count - 1) % state.responses.len();
+            Some(state.responses[index].clone())
+        }
+    }
+
+    fn call_count(&self) -> usize {
+        self.state.lock().unwrap().call_count
+    }
+}
+
+#[derive(Clone, Default)]
+/// Mock chat client with canned response cycling and call-count tracking.
 pub struct MockChatClient {
-    prompt_responses: Arc<Mutex<Vec<String>>>,
-    call_count: Arc<Mutex<usize>>,
+    state: MockResponses<String>,
 }
 
 impl MockChatClient {
     pub fn new() -> Self {
-        Self {
-            prompt_responses: Arc::new(Mutex::new(Vec::new())),
-            call_count: Arc::new(Mutex::new(0)),
-        }
+        Self::default()
     }
 
     pub fn with_prompt_response(self, response: String) -> Self {
-        self.prompt_responses.lock().unwrap().push(response);
-        self
+        Self {
+            state: self.state.with_response(response),
+        }
     }
 
     pub fn get_call_count(&self) -> usize {
-        *self.call_count.lock().unwrap()
-    }
-}
-
-impl Default for MockChatClient {
-    fn default() -> Self {
-        Self::new()
+        self.state.call_count()
     }
 }
 
 #[async_trait]
 impl ChatService for MockChatClient {
     async fn generate_prompt(&self, words: &[Word]) -> Result<String> {
-        let mut count = self.call_count.lock().unwrap();
-        *count += 1;
-
-        let responses = self.prompt_responses.lock().unwrap();
-        if responses.is_empty() {
-            let word_list: Vec<String> = words.iter().map(|w| w.word.clone()).collect();
-            Ok(format!("A dreamlike scene with {}", word_list.join(", ")))
-        } else {
-            let index = (*count - 1) % responses.len();
-            Ok(responses[index].clone())
+        if let Some(response) = self.state.next() {
+            return Ok(response);
         }
+
+        let word_list: Vec<String> = words.iter().map(|w| w.word.clone()).collect();
+        Ok(format!("A dreamlike scene with {}", word_list.join(", ")))
     }
 }
 
+#[derive(Clone, Default)]
+/// Mock image generation client with canned byte responses and call counting.
 pub struct MockImageGenerationClient {
-    image_responses: Arc<Mutex<Vec<Vec<u8>>>>,
-    call_count: Arc<Mutex<usize>>,
+    state: MockResponses<Vec<u8>>,
 }
 
 impl MockImageGenerationClient {
     pub fn new() -> Self {
-        Self {
-            image_responses: Arc::new(Mutex::new(Vec::new())),
-            call_count: Arc::new(Mutex::new(0)),
-        }
+        Self::default()
     }
 
     pub fn with_image_response(self, response: Vec<u8>) -> Self {
-        self.image_responses.lock().unwrap().push(response);
-        self
+        Self {
+            state: self.state.with_response(response),
+        }
     }
 
     pub fn get_call_count(&self) -> usize {
-        *self.call_count.lock().unwrap()
-    }
-}
-
-impl Default for MockImageGenerationClient {
-    fn default() -> Self {
-        Self::new()
+        self.state.call_count()
     }
 }
 
 #[async_trait]
 impl ImageGenerationService for MockImageGenerationClient {
     async fn generate_image(&self, _prompt: &str, _words: &[Word]) -> Result<Vec<u8>> {
-        let mut count = self.call_count.lock().unwrap();
-        *count += 1;
-
-        let responses = self.image_responses.lock().unwrap();
-        if responses.is_empty() {
-            // Minimal valid PNG
-            Ok(vec![
-                0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
-                0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
-                0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08,
-                0x99, 0x63, 0xF8, 0xCF, 0xC0, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0xE2, 0x25, 0x00,
-                0xBC, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
-            ])
-        } else {
-            let index = (*count - 1) % responses.len();
-            Ok(responses[index].clone())
+        if let Some(response) = self.state.next() {
+            return Ok(response);
         }
+
+        // Minimal valid PNG
+        Ok(vec![
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
+            0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08,
+            0x99, 0x63, 0xF8, 0xCF, 0xC0, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0xE2, 0x25, 0x00,
+            0xBC, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        ])
     }
 }
 
+#[derive(Clone, Default)]
+/// Mock image QA client that cycles configured boolean detections.
 pub struct MockImageQaClient {
-    text_detection_responses: Arc<Mutex<Vec<bool>>>,
-    call_count: Arc<Mutex<usize>>,
+    state: MockResponses<bool>,
 }
 
 impl MockImageQaClient {
     pub fn new() -> Self {
-        Self {
-            text_detection_responses: Arc::new(Mutex::new(Vec::new())),
-            call_count: Arc::new(Mutex::new(0)),
-        }
+        Self::default()
     }
 
     pub fn with_text_detection_response(self, has_text: bool) -> Self {
-        self.text_detection_responses.lock().unwrap().push(has_text);
-        self
+        Self {
+            state: self.state.with_response(has_text),
+        }
     }
 
     pub fn get_call_count(&self) -> usize {
-        *self.call_count.lock().unwrap()
-    }
-}
-
-impl Default for MockImageQaClient {
-    fn default() -> Self {
-        Self::new()
+        self.state.call_count()
     }
 }
 
 #[async_trait]
 impl ImageQaService for MockImageQaClient {
     async fn detect_text(&self, _image_bytes: &[u8]) -> Result<bool> {
-        let mut count = self.call_count.lock().unwrap();
-        *count += 1;
+        Ok(self.state.next().unwrap_or(false))
+    }
+}
 
-        let responses = self.text_detection_responses.lock().unwrap();
-        if responses.is_empty() {
-            Ok(false)
-        } else {
-            let index = (*count - 1) % responses.len();
-            Ok(responses[index])
+#[derive(Clone, Default)]
+/// Mock embedding client with canned vector responses and deterministic fallback.
+pub struct MockEmbeddingClient {
+    state: MockResponses<Vec<Vec<f32>>>,
+}
+
+impl MockEmbeddingClient {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_embedding_response(self, response: Vec<Vec<f32>>) -> Self {
+        // Intentionally does not validate response length against future request input length.
+        // Callers that care about count mismatch should assert at the call site.
+        Self {
+            state: self.state.with_response(response),
         }
+    }
+
+    pub fn get_call_count(&self) -> usize {
+        self.state.call_count()
+    }
+}
+
+#[async_trait]
+impl EmbeddingService for MockEmbeddingClient {
+    async fn embed_texts(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+        if let Some(response) = self.state.next() {
+            return Ok(response);
+        }
+
+        // Deterministic fallback vectors keep tests reproducible without asserting exact model values.
+        Ok(texts
+            .iter()
+            .map(|text| {
+                let len = text.len() as f32;
+                vec![len, len + 1.0, len + 2.0]
+            })
+            .collect())
     }
 }
 
@@ -229,14 +264,48 @@ mod tests {
         let chat = MockChatClient::new();
         let image = MockImageGenerationClient::new();
         let qa = MockImageQaClient::new();
+        let embeddings = MockEmbeddingClient::new();
 
         chat.generate_prompt(&[]).await.unwrap();
         chat.generate_prompt(&[]).await.unwrap();
         image.generate_image("test", &[]).await.unwrap();
         qa.detect_text(&[]).await.unwrap();
+        embeddings.embed_texts(&["alpha", "beta"]).await.unwrap();
 
         assert_eq!(chat.get_call_count(), 2);
         assert_eq!(image.get_call_count(), 1);
         assert_eq!(qa.get_call_count(), 1);
+        assert_eq!(embeddings.get_call_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_embedding_default_is_deterministic_shape() {
+        let client = MockEmbeddingClient::new();
+        let vectors = client.embed_texts(&["cat", "elephant"]).await.unwrap();
+
+        assert_eq!(vectors.len(), 2);
+        assert_eq!(vectors[0].len(), 3);
+        assert_eq!(vectors[0], vec![3.0, 4.0, 5.0]);
+        assert_eq!(vectors[1], vec![8.0, 9.0, 10.0]);
+    }
+
+    #[tokio::test]
+    async fn test_embedding_custom_responses_cycle() {
+        let client = MockEmbeddingClient::new()
+            .with_embedding_response(vec![vec![0.1, 0.2]])
+            .with_embedding_response(vec![vec![0.3, 0.4]]);
+
+        assert_eq!(
+            client.embed_texts(&["a"]).await.unwrap(),
+            vec![vec![0.1, 0.2]]
+        );
+        assert_eq!(
+            client.embed_texts(&["b"]).await.unwrap(),
+            vec![vec![0.3, 0.4]]
+        );
+        assert_eq!(
+            client.embed_texts(&["c"]).await.unwrap(),
+            vec![vec![0.1, 0.2]]
+        );
     }
 }

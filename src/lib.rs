@@ -4,11 +4,13 @@
 //! with varying difficulty levels, then uploads them to a CDN for web consumption.
 
 pub mod ai;
+pub mod app;
 pub mod cdn;
 pub mod error;
 pub mod image;
 pub mod models;
 pub mod prompts;
+pub mod semantic;
 pub mod words;
 
 pub use error::{Error, Result};

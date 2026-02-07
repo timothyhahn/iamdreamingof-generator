@@ -1,5 +1,5 @@
 use super::{ImageService, ProcessedImages};
-use crate::Result;
+use crate::{Error, Result};
 use async_trait::async_trait;
 use image::{DynamicImage, ImageFormat};
 use little_exif::metadata::Metadata;
@@ -17,17 +17,30 @@ impl ImageProcessor {
         })
     }
 
-    async fn resize_and_save(
-        &self,
+    fn save_variants_sync(
         image: DynamicImage,
-        output_path: &Path,
-        format: ImageFormat,
+        jpeg_path: PathBuf,
+        webp_path: PathBuf,
     ) -> Result<()> {
         let resized = image.resize_exact(800, 800, image::imageops::FilterType::Lanczos3);
-
-        resized.save_with_format(output_path, format)?;
-
+        resized.save_with_format(jpeg_path, ImageFormat::Jpeg)?;
+        resized.save_with_format(webp_path, ImageFormat::WebP)?;
         Ok(())
+    }
+
+    async fn save_variants(
+        &self,
+        image: DynamicImage,
+        jpeg_path: &Path,
+        webp_path: &Path,
+    ) -> Result<()> {
+        tokio::task::spawn_blocking({
+            let jpeg_path = jpeg_path.to_path_buf();
+            let webp_path = webp_path.to_path_buf();
+            move || Self::save_variants_sync(image, jpeg_path, webp_path)
+        })
+        .await
+        .map_err(|e| Error::Invariant(format!("Image processing task join error: {}", e)))?
     }
 }
 
@@ -44,22 +57,18 @@ impl ImageService for ImageProcessor {
         let jpeg_path = self.output_dir.join(&jpeg_filename);
         let webp_path = self.output_dir.join(&webp_filename);
 
-        self.resize_and_save(img.clone(), &jpeg_path, ImageFormat::Jpeg)
-            .await?;
+        self.save_variants(img, &jpeg_path, &webp_path).await?;
         // Strip EXIF to prevent stale orientation tags from confusing viewers
         if let Err(e) = Metadata::file_clear_metadata(&jpeg_path) {
             tracing::warn!("Failed to strip EXIF from JPEG: {}", e);
         }
-
-        self.resize_and_save(img, &webp_path, ImageFormat::WebP)
-            .await?;
         if let Err(e) = Metadata::file_clear_metadata(&webp_path) {
             tracing::warn!("Failed to strip EXIF from WebP: {}", e);
         }
 
         Ok(ProcessedImages {
-            jpeg_path: jpeg_path.to_string_lossy().to_string(),
-            webp_path: webp_path.to_string_lossy().to_string(),
+            jpeg_path,
+            webp_path,
         })
     }
 }
@@ -67,7 +76,6 @@ impl ImageService for ImageProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Error;
     use tempfile::TempDir;
 
     fn create_test_image() -> Vec<u8> {
@@ -85,8 +93,7 @@ mod tests {
 
     impl TestImageProcessor {
         fn new() -> Result<Self> {
-            let temp_dir = TempDir::new()
-                .map_err(|e| Error::Generic(format!("Failed to create temp dir: {}", e)))?;
+            let temp_dir = TempDir::new()?;
 
             let processor = ImageProcessor {
                 output_dir: temp_dir.path().to_path_buf(),
@@ -107,11 +114,11 @@ mod tests {
 
         let result = processor.process_image(&test_image, "test").await.unwrap();
 
-        assert!(Path::new(&result.jpeg_path).exists());
-        assert!(Path::new(&result.webp_path).exists());
+        assert!(result.jpeg_path.exists());
+        assert!(result.webp_path.exists());
 
-        assert!(result.jpeg_path.ends_with(".jpg"));
-        assert!(result.webp_path.ends_with(".webp"));
+        assert!(result.jpeg_path.to_string_lossy().ends_with(".jpg"));
+        assert!(result.webp_path.to_string_lossy().ends_with(".webp"));
 
         let jpeg_img = image::open(&result.jpeg_path).unwrap();
         assert_eq!(jpeg_img.width(), 800);

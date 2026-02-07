@@ -1,62 +1,27 @@
 use super::client::GeminiHttpClient;
+use super::types::{Content, GenerateContentResponse, InlineData, Part};
 use crate::ai::ImageQaService;
 use crate::models::TextDetectionResponse;
 use crate::{prompts, Error, Result};
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::time::Duration;
 
 #[derive(Debug, Serialize)]
-struct GenerateContentRequest {
+struct QaRequest {
     system_instruction: Option<Content>,
     contents: Vec<Content>,
     #[serde(rename = "generationConfig")]
-    generation_config: Option<GenerationConfig>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct Content {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    role: Option<String>,
-    parts: Vec<Part>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(untagged)]
-enum Part {
-    Text {
-        text: String,
-    },
-    InlineData {
-        #[serde(rename = "inlineData")]
-        inline_data: InlineData,
-    },
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct InlineData {
-    mime_type: String,
-    data: String,
+    generation_config: Option<QaGenerationConfig>,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct GenerationConfig {
+struct QaGenerationConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     max_output_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     response_mime_type: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GenerateContentResponse {
-    candidates: Vec<Candidate>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Candidate {
-    content: Content,
 }
 
 pub struct GeminiImageQaClient {
@@ -65,17 +30,23 @@ pub struct GeminiImageQaClient {
 
 impl GeminiImageQaClient {
     pub fn new(api_key: String, model: String) -> Self {
-        Self {
-            http: GeminiHttpClient::new(api_key, model, Duration::from_secs(30)),
-        }
+        Self::new_with_client(api_key, model, reqwest::Client::new())
     }
 
-    #[cfg(test)]
-    fn with_base_url(mut self, base_url: String) -> Self {
-        self.http = self.http.with_base_url(base_url);
-        self
+    pub fn new_with_client(api_key: String, model: String, client: reqwest::Client) -> Self {
+        Self {
+            http: GeminiHttpClient::new_with_client(
+                api_key,
+                model,
+                Duration::from_secs(30),
+                client,
+            ),
+        }
     }
 }
+
+#[cfg(test)]
+super::impl_with_gemini_base_url!(GeminiImageQaClient);
 
 #[async_trait]
 impl ImageQaService for GeminiImageQaClient {
@@ -88,7 +59,7 @@ impl ImageQaService for GeminiImageQaClient {
         use base64::Engine as _;
         let base64_image = base64::engine::general_purpose::STANDARD.encode(image_bytes);
 
-        let request = GenerateContentRequest {
+        let request = QaRequest {
             system_instruction: Some(Content {
                 role: None,
                 parts: vec![Part::Text {
@@ -109,7 +80,7 @@ impl ImageQaService for GeminiImageQaClient {
                     },
                 ],
             }],
-            generation_config: Some(GenerationConfig {
+            generation_config: Some(QaGenerationConfig {
                 max_output_tokens: Some(100),
                 response_mime_type: Some("application/json".to_string()),
             }),
@@ -149,15 +120,21 @@ impl ImageQaService for GeminiImageQaClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::{body_string_contains, method, path_regex};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use crate::ai::gemini::test_support;
+    use wiremock::matchers::body_string_contains;
+    use wiremock::{MockServer, ResponseTemplate};
+
+    const DEFAULT_MODEL: &str = "gemini-3-flash-preview";
+
+    fn make_client(server: &MockServer, api_key: &str, model: &str) -> GeminiImageQaClient {
+        GeminiImageQaClient::new(api_key.to_string(), model.to_string()).with_base_url(server.uri())
+    }
 
     #[tokio::test]
     async fn test_detect_text_returns_false_when_no_text() {
         let server = MockServer::start().await;
 
-        Mock::given(method("POST"))
-            .and(path_regex(r"/v1beta/models/.+:generateContent"))
+        test_support::post_path_regex(test_support::GENERATE_CONTENT_PATH_REGEX)
             .and(body_string_contains("\"inlineData\""))
             .and(body_string_contains("\"mimeType\""))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -170,9 +147,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client =
-            GeminiImageQaClient::new("test-key".to_string(), "gemini-3-flash-preview".to_string())
-                .with_base_url(server.uri());
+        let client = make_client(&server, "test-key", DEFAULT_MODEL);
 
         let has_text = client.detect_text(&[0x89, 0x50]).await.unwrap();
         assert!(!has_text);
@@ -182,8 +157,7 @@ mod tests {
     async fn test_detect_text_returns_true_when_text_found() {
         let server = MockServer::start().await;
 
-        Mock::given(method("POST"))
-            .and(path_regex(r"/v1beta/models/.+:generateContent"))
+        test_support::post_path_regex(test_support::GENERATE_CONTENT_PATH_REGEX)
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "candidates": [{
                     "content": {
@@ -194,9 +168,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client =
-            GeminiImageQaClient::new("test-key".to_string(), "gemini-3-flash-preview".to_string())
-                .with_base_url(server.uri());
+        let client = make_client(&server, "test-key", DEFAULT_MODEL);
 
         let has_text = client.detect_text(&[0x89, 0x50]).await.unwrap();
         assert!(has_text);
@@ -206,16 +178,49 @@ mod tests {
     async fn test_api_error_returns_ai_provider_error() {
         let server = MockServer::start().await;
 
-        Mock::given(method("POST"))
-            .and(path_regex(r"/v1beta/models/.+:generateContent"))
+        test_support::post_path_regex(test_support::GENERATE_CONTENT_PATH_REGEX)
             .respond_with(ResponseTemplate::new(500).set_body_string("internal error"))
             .mount(&server)
             .await;
 
-        let client =
-            GeminiImageQaClient::new("key".to_string(), "gemini-3-flash-preview".to_string())
-                .with_base_url(server.uri());
+        let client = make_client(&server, "key", DEFAULT_MODEL);
 
+        let err = client.detect_text(&[0x89, 0x50]).await.unwrap_err();
+        assert!(matches!(err, Error::AiProvider(_)));
+    }
+
+    #[tokio::test]
+    async fn test_detect_text_rejects_empty_candidates() {
+        let server = MockServer::start().await;
+
+        test_support::post_path_regex(test_support::GENERATE_CONTENT_PATH_REGEX)
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "candidates": []
+            })))
+            .mount(&server)
+            .await;
+
+        let client = make_client(&server, "test-key", DEFAULT_MODEL);
+        let err = client.detect_text(&[0x89, 0x50]).await.unwrap_err();
+        assert!(matches!(err, Error::AiProvider(_)));
+    }
+
+    #[tokio::test]
+    async fn test_detect_text_rejects_invalid_json_payload() {
+        let server = MockServer::start().await;
+
+        test_support::post_path_regex(test_support::GENERATE_CONTENT_PATH_REGEX)
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "candidates": [{
+                    "content": {
+                        "parts": [{ "text": "{\"includes_text\":\"sometimes\"}" }]
+                    }
+                }]
+            })))
+            .mount(&server)
+            .await;
+
+        let client = make_client(&server, "test-key", DEFAULT_MODEL);
         let err = client.detect_text(&[0x89, 0x50]).await.unwrap_err();
         assert!(matches!(err, Error::AiProvider(_)));
     }

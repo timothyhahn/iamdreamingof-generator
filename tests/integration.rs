@@ -1,12 +1,17 @@
+use chrono::NaiveDate;
 use iamdreamingof_generator::{
     ai::{
         ChatService, ImageGenerationService, ImageQaService, MockChatClient,
         MockImageGenerationClient, MockImageQaClient,
     },
+    app::{App, AppServices},
     cdn::{CdnService, MockCdnClient},
     image::{ImageService, MockImageProcessor},
     models::{Challenge, Challenges, Day, Days, Word, WordType},
+    words::WordSelector,
 };
+use std::fs;
+use std::path::Path;
 
 #[tokio::test]
 async fn test_full_workflow_with_mocks() {
@@ -17,7 +22,9 @@ async fn test_full_workflow_with_mocks() {
     let image_qa = MockImageQaClient::new();
 
     let cdn = MockCdnClient::new().with_base_url("https://test-cdn.com".to_string());
-    let image_processor = MockImageProcessor::new().with_base_path("/test".to_string());
+    let dir = tempfile::tempdir().unwrap();
+    let image_processor =
+        MockImageProcessor::new().with_base_path(dir.path().to_string_lossy().to_string());
 
     let words = vec![
         Word {
@@ -47,8 +54,8 @@ async fn test_full_workflow_with_mocks() {
         .process_image(&image_data, "test")
         .await
         .unwrap();
-    assert!(processed.jpeg_path.ends_with(".jpg"));
-    assert!(processed.webp_path.ends_with(".webp"));
+    assert!(processed.jpeg_path.to_string_lossy().ends_with(".jpg"));
+    assert!(processed.webp_path.to_string_lossy().ends_with(".webp"));
 
     // CDN upload
     let url = cdn
@@ -207,4 +214,34 @@ fn create_test_challenge(difficulty: &str) -> Challenge {
         format!("https://cdn.example.com/images/{}.webp", difficulty),
         format!("Test prompt for {} difficulty", difficulty),
     )
+}
+
+#[tokio::test]
+async fn test_app_with_services_is_usable_from_integration_tests() {
+    let temp = tempfile::tempdir().unwrap();
+    let output_dir = temp.path().join("output");
+    fs::create_dir_all(&output_dir).unwrap();
+
+    let app = App::with_services(
+        AppServices {
+            chat: Box::new(MockChatClient::new().with_prompt_response("A dream scene".to_string())),
+            image_gen: Box::new(
+                MockImageGenerationClient::new().with_image_response(vec![1, 2, 3]),
+            ),
+            image_qa: Box::new(MockImageQaClient::new().with_text_detection_response(false)),
+            cdn: Box::new(MockCdnClient::new().with_base_url("https://cdn.test".to_string())),
+            image: Box::new(
+                MockImageProcessor::new().with_base_path(output_dir.to_string_lossy().to_string()),
+            ),
+            word_selector: WordSelector::from_files(Path::new("data")).unwrap(),
+        },
+        output_dir.clone(),
+        true,
+    );
+
+    app.run(Some(NaiveDate::from_ymd_opt(2099, 2, 7).unwrap()))
+        .await
+        .unwrap();
+
+    assert!(output_dir.join("2099-02-07.json").exists());
 }

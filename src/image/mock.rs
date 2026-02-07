@@ -1,12 +1,14 @@
 use super::{ImageService, ProcessedImages};
 use crate::Result;
 use async_trait::async_trait;
+use std::fs;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
 pub struct MockImageProcessor {
     process_count: Arc<Mutex<usize>>,
-    base_path: String,
+    base_path: PathBuf,
     should_fail: Arc<Mutex<bool>>,
 }
 
@@ -14,13 +16,13 @@ impl MockImageProcessor {
     pub fn new() -> Self {
         Self {
             process_count: Arc::new(Mutex::new(0)),
-            base_path: "/tmp".to_string(),
+            base_path: PathBuf::from("/tmp"),
             should_fail: Arc::new(Mutex::new(false)),
         }
     }
 
     pub fn with_base_path(mut self, path: String) -> Self {
-        self.base_path = path;
+        self.base_path = PathBuf::from(path);
         self
     }
 
@@ -53,8 +55,14 @@ impl ImageService for MockImageProcessor {
         *count += 1;
 
         let uuid = Uuid::new_v4();
-        let jpeg_path = format!("{}/{}_{}.jpg", self.base_path, base_name, uuid);
-        let webp_path = format!("{}/{}_{}.webp", self.base_path, base_name, uuid);
+        let jpeg_path = self.base_path.join(format!("{}_{}.jpg", base_name, uuid));
+        let webp_path = self.base_path.join(format!("{}_{}.webp", base_name, uuid));
+
+        fs::create_dir_all(&self.base_path)?;
+        // Write lightweight fixtures so callers that read from returned paths
+        // exercise the same contract as production ImageProcessor.
+        fs::write(&jpeg_path, b"mock-jpeg-bytes")?;
+        fs::write(&webp_path, b"mock-webp-bytes")?;
 
         Ok(ProcessedImages {
             jpeg_path,
@@ -76,22 +84,26 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(result.jpeg_path.contains("test"));
-        assert!(result.jpeg_path.ends_with(".jpg"));
-        assert!(result.webp_path.contains("test"));
-        assert!(result.webp_path.ends_with(".webp"));
+        assert!(result.jpeg_path.to_string_lossy().contains("test"));
+        assert!(result.jpeg_path.to_string_lossy().ends_with(".jpg"));
+        assert!(result.webp_path.to_string_lossy().contains("test"));
+        assert!(result.webp_path.to_string_lossy().ends_with(".webp"));
+        assert!(result.jpeg_path.exists());
+        assert!(result.webp_path.exists());
 
         assert_eq!(processor.get_process_count(), 1);
     }
 
     #[tokio::test]
     async fn test_mock_with_custom_path() {
-        let processor = MockImageProcessor::new().with_base_path("/custom/path".to_string());
+        let dir = tempfile::tempdir().unwrap();
+        let processor =
+            MockImageProcessor::new().with_base_path(dir.path().to_string_lossy().to_string());
 
         let result = processor.process_image(b"data", "image").await.unwrap();
 
-        assert!(result.jpeg_path.starts_with("/custom/path"));
-        assert!(result.webp_path.starts_with("/custom/path"));
+        assert!(result.jpeg_path.starts_with(dir.path()));
+        assert!(result.webp_path.starts_with(dir.path()));
     }
 
     #[tokio::test]

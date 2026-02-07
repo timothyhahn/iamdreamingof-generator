@@ -86,28 +86,4 @@ impl CdnService for CdnClient {
 
         String::from_utf8(bytes.to_vec()).map_err(|e| Error::S3(format!("Invalid UTF-8: {}", e)))
     }
-
-    async fn file_exists(&self, key: &str) -> Result<bool> {
-        match self
-            .client
-            .head_object()
-            .bucket(&self.bucket)
-            .key(key)
-            .send()
-            .await
-        {
-            Ok(_) => Ok(true),
-            Err(e) => {
-                let service_error = e.into_service_error();
-                if service_error.is_not_found() {
-                    Ok(false)
-                } else {
-                    Err(Error::S3(format!(
-                        "Failed to check file existence: {}",
-                        service_error
-                    )))
-                }
-            }
-        }
-    }
 }

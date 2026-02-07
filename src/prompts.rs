@@ -1,3 +1,5 @@
+//! Prompt templates and lightweight template rendering helpers.
+
 pub const CHAT_SYSTEM: &str = include_str!("../data/prompts/chat_system.txt");
 pub const CHAT_USER: &str = include_str!("../data/prompts/chat_user.txt");
 pub const IMAGE_ENHANCEMENT: &str = include_str!("../data/prompts/image_enhancement.txt");
